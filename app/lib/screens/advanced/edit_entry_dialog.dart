@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/models.dart';
 import '../../services/database_repository.dart';
+import '../../services/pricing.dart';
 import '../../widgets/autocomplete_field.dart';
 
 /// Opens the edit dialog and returns the saved entry, or null if cancelled.
@@ -17,7 +18,8 @@ Future<PriceEntry?> showEditEntryDialog(
 }
 
 class EditEntryDialog extends StatefulWidget {
-  const EditEntryDialog({super.key, required this.entry, required this.repository});
+  const EditEntryDialog(
+      {super.key, required this.entry, required this.repository});
   final PriceEntry entry;
   final DatabaseRepository repository;
 
@@ -27,6 +29,9 @@ class EditEntryDialog extends StatefulWidget {
 
 class _EditEntryDialogState extends State<EditEntryDialog> {
   late PriceEntry _e;
+
+  // Free-text buffers for the lookup-backed fields. They are resolved to (or
+  // created in) their lookup tables on save.
   late String _localityText;
   late String _countyText;
   late String _categoryText;
@@ -37,12 +42,8 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
   late String _sourceText;
   late String _countryText;
   late String _coinTypeText;
-  late String _measure1Text;
-  late String _measure2Text;
-  late String _measure3Text;
-  late String _valuationText;
-  late String _outputXText;
-  late String _outputYText;
+
+  DatabaseRepository get _repo => widget.repository;
 
   @override
   void initState() {
@@ -58,15 +59,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
     _sourceText = _e.sourceCitation ?? '';
     _countryText = _e.countryName ?? '';
     _coinTypeText = _e.coinTypeName ?? '';
-    _measure1Text = _e.measure1Name ?? '';
-    _measure2Text = _e.measure2Name ?? '';
-    _measure3Text = _e.measure3Name ?? '';
-    _valuationText = _e.valuationUnitName ?? '';
-    _outputXText = _e.outputXName ?? '';
-    _outputYText = _e.outputYName ?? '';
   }
-
-  DatabaseRepository get _repo => widget.repository;
 
   void _save() {
     final repo = _repo;
@@ -82,29 +75,62 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
       );
     }
     _e.timePeriodId = repo.resolveOrCreateTimePeriod(_timePeriodText);
-    _e.multiplierMeasureId = repo.resolveOrCreateMultiplierMeasure(_multiplierMeasureText);
+    _e.multiplierMeasureId =
+        repo.resolveOrCreateMultiplierMeasure(_multiplierMeasureText);
     _e.sourceId = repo.resolveOrCreateSource(_sourceText);
     _e.countryId = repo.resolveOrCreateCountry(_countryText);
     _e.coinTypeId = repo.resolveOrCreateCoinType(_coinTypeText);
-    _e.measure1UnitId = repo.resolveOrCreateUnit(_measure1Text);
-    _e.measure2UnitId = repo.resolveOrCreateUnit(_measure2Text);
-    _e.measure3UnitId = repo.resolveOrCreateUnit(_measure3Text);
-    _e.valuationUnitId = repo.resolveOrCreateUnit(_valuationText);
-    _e.outputXUnitId = repo.resolveOrCreateUnit(_outputXText);
-    _e.outputYUnitId = repo.resolveOrCreateUnit(_outputYText);
-
     Navigator.of(context).pop(_e);
+  }
+
+  /// Measures and standards are separate vocabularies; picking from the wrong
+  /// one is the single easiest way to corrupt a figure, so each field is bound
+  /// to exactly one of them.
+  Widget _measureField(String label, MetricItem? current,
+      List<String> suggestions, ValueChanged<MetricItem?> onChanged) {
+    return _metricField(label, current, suggestions,
+        (name) => _repo.resolveOrCreateMeasure(name), onChanged);
+  }
+
+  Widget _standardField(String label, MetricItem? current,
+      List<String> suggestions, ValueChanged<MetricItem?> onChanged) {
+    return _metricField(label, current, suggestions,
+        (name) => _repo.resolveOrCreateStandard(name), onChanged);
+  }
+
+  Widget _metricField(
+    String label,
+    MetricItem? current,
+    List<String> suggestions,
+    MetricItem? Function(String) resolve,
+    ValueChanged<MetricItem?> onChanged,
+  ) {
+    // A unit with no metric value cannot contribute to any figure. Saying so
+    // here is far kinder than letting the reader wonder why a total is zero.
+    final warning = current != null && !current.isResolved
+        ? 'No metric value on record — contributes 0'
+        : null;
+    return AutocompleteField(
+      label: label,
+      initialValue: current?.name ?? '',
+      suggestions: suggestions,
+      helperText: warning,
+      onChanged: (text) => setState(() => onChanged(resolve(text))),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final repo = _repo;
-    final unitNames = repo.units.map((u) => u.label).toList();
-    final localityNames = repo.places().map((p) => p.label.split(',').first).toSet().toList();
+    final measureNames = repo.measures.map((m) => m.name).toList();
+    final standardNames = repo.standards.map((s) => s.name).toList();
+    final localityNames =
+        repo.places().map((p) => p.label.split(',').first).toSet().toList();
     final countyNames = repo.counties.map((c) => c.label).toList();
     final categoryNames = repo.categories.map((c) => c.name).toList();
     final subcategoryNames = <String>{
-      for (final c in repo.categories) for (final s in repo.subcategoriesOf(c.id)) s.name,
+      for (final c in repo.categories)
+        for (final s in repo.subcategoriesOf(c.id)) s.name,
     }.toList();
     final specificNames = <String>{
       for (final c in repo.categories)
@@ -115,11 +141,12 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
     final countryNames = repo.countries.map((c) => c.label).toList();
     final coinTypeNames = repo.coinTypes.map((c) => c.label).toList();
     final timePeriodNames = repo.timePeriods.map((t) => t.label).toList();
-    final multiplierMeasureNames = repo.multiplierMeasures.map((m) => m.label).toList();
+    final multiplierMeasureNames =
+        repo.multiplierMeasures.map((m) => m.label).toList();
 
     return Dialog(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 640, maxHeight: 780),
+        constraints: const BoxConstraints(maxWidth: 660, maxHeight: 800),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -180,6 +207,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                           label: 'Time period',
                           initialValue: _timePeriodText,
                           suggestions: timePeriodNames,
+                          helperText: 'Month, season or feast',
                           onChanged: (v) => _timePeriodText = v,
                         ),
                       ),
@@ -219,18 +247,59 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         ),
                       ),
                     ]),
-                    _section('Quantity & price'),
+                    _section('Quantity'),
                     _row([
-                      Expanded(child: NumberField(label: 'Unit 1', initialValue: _e.unit1, onChanged: (v) => _e.unit1 = v?.toDouble())),
-                      Expanded(child: NumberField(label: 'Unit 2', initialValue: _e.unit2, onChanged: (v) => _e.unit2 = v?.toDouble())),
-                      Expanded(child: NumberField(label: 'Unit 3', initialValue: _e.unit3, onChanged: (v) => _e.unit3 = v?.toDouble())),
+                      Expanded(
+                        child: NumberField(
+                          label: 'Unit 1',
+                          initialValue: _e.unit1,
+                          onChanged: (v) =>
+                              setState(() => _e.unit1 = v?.toDouble()),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: _measureField('Measure 1', _e.measure1,
+                            measureNames, (m) => _e.measure1 = m),
+                      ),
+                    ]),
+                    _row([
+                      Expanded(
+                        child: NumberField(
+                          label: 'Unit 2',
+                          initialValue: _e.unit2,
+                          onChanged: (v) =>
+                              setState(() => _e.unit2 = v?.toDouble()),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: _measureField('Measure 2', _e.measure2,
+                            measureNames, (m) => _e.measure2 = m),
+                      ),
+                    ]),
+                    _row([
+                      Expanded(
+                        child: NumberField(
+                          label: 'Unit 3',
+                          initialValue: _e.unit3,
+                          onChanged: (v) =>
+                              setState(() => _e.unit3 = v?.toDouble()),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: _measureField('Measure 3', _e.measure3,
+                            measureNames, (m) => _e.measure3 = m),
+                      ),
                     ]),
                     _row([
                       Expanded(
                         child: NumberField(
                           label: 'Multiplier / workers',
                           initialValue: _e.multiplierWorkers,
-                          onChanged: (v) => _e.multiplierWorkers = v?.toDouble(),
+                          onChanged: (v) => setState(
+                              () => _e.multiplierWorkers = v?.toDouble()),
                         ),
                       ),
                       Expanded(
@@ -242,17 +311,88 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         ),
                       ),
                     ]),
+                    _section('Price as recorded'),
+                    Text(
+                      'Often a price per valuation measure rather than a total '
+                      '— like an hourly wage, not a pay slip.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                    const SizedBox(height: 12),
                     _row([
-                      Expanded(child: NumberField(label: 'Pounds (£)', initialValue: _e.pounds, onChanged: (v) => _e.pounds = v?.toDouble())),
-                      Expanded(child: NumberField(label: 'Shillings (s)', initialValue: _e.shillings, onChanged: (v) => _e.shillings = v?.toDouble())),
-                      Expanded(child: NumberField(label: 'Pence (d)', initialValue: _e.pence, onChanged: (v) => _e.pence = v?.toDouble())),
+                      Expanded(
+                        child: NumberField(
+                          label: 'Pounds (£)',
+                          initialValue: _e.pounds,
+                          onChanged: (v) =>
+                              setState(() => _e.pounds = v?.toDouble()),
+                        ),
+                      ),
+                      Expanded(
+                        child: NumberField(
+                          label: 'Shillings (s)',
+                          initialValue: _e.shillings,
+                          onChanged: (v) =>
+                              setState(() => _e.shillings = v?.toDouble()),
+                        ),
+                      ),
+                      Expanded(
+                        child: NumberField(
+                          label: 'Pence (d)',
+                          initialValue: _e.pence,
+                          onChanged: (v) =>
+                              setState(() => _e.pence = v?.toDouble()),
+                        ),
+                      ),
                     ]),
+                    _row([
+                      Expanded(
+                        child: _measureField(
+                            'Valuation measure',
+                            _e.valuationMeasure,
+                            measureNames,
+                            (m) => _e.valuationMeasure = m),
+                      ),
+                    ]),
+                    _section('Output units'),
+                    Text(
+                      'Drawn from the Standards vocabulary, not Measures. '
+                      'Output X is a data correction; output Y is only the '
+                      'default the reader sees first.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                    const SizedBox(height: 12),
+                    _row([
+                      Expanded(
+                        child: _standardField('Output X', _e.outputX,
+                            standardNames, (s) => _e.outputX = s),
+                      ),
+                      Expanded(
+                        child: _standardField('Output Y (default)', _e.outputY,
+                            standardNames, (s) => _e.outputY = s),
+                      ),
+                    ]),
+                    const SizedBox(height: 20),
+                    _CalculationPreview(entry: _e),
+                    _section('Notes & source'),
                     TextFormField(
                       initialValue: _e.statusInfo,
                       decoration: const InputDecoration(labelText: 'Status / info'),
                       onChanged: (v) => _e.statusInfo = v,
                     ),
-                    _section('Source'),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      initialValue: _e.food,
+                      decoration: const InputDecoration(
+                        labelText: 'Food',
+                        helperText: 'Payment in kind, where it was not in coin',
+                      ),
+                      onChanged: (v) => _e.food = v,
+                    ),
+                    const SizedBox(height: 12),
                     AutocompleteField(
                       label: 'Source citation',
                       initialValue: _sourceText,
@@ -261,7 +401,14 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                     ),
                     const SizedBox(height: 12),
                     _row([
-                      Expanded(child: NumberField(label: 'Page', initialValue: _e.page, integer: true, onChanged: (v) => _e.page = v?.toInt())),
+                      Expanded(
+                        child: NumberField(
+                          label: 'Page',
+                          initialValue: _e.page,
+                          integer: true,
+                          onChanged: (v) => _e.page = v?.toInt(),
+                        ),
+                      ),
                       Expanded(
                         child: AutocompleteField(
                           label: 'Country',
@@ -286,88 +433,6 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                       decoration: const InputDecoration(labelText: 'Information'),
                       onChanged: (v) => _e.information = v,
                     ),
-                    const SizedBox(height: 8),
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      title: const Text('Calculated / measure fields'),
-                      subtitle: const Text('Unit conversions used for this entry\'s figures'),
-                      childrenPadding: const EdgeInsets.only(bottom: 12),
-                      children: [
-                        _row([
-                          Expanded(
-                            child: AutocompleteField(
-                              label: 'Measure 1',
-                              initialValue: _measure1Text,
-                              suggestions: unitNames,
-                              onChanged: (v) => _measure1Text = v,
-                            ),
-                          ),
-                          Expanded(
-                            child: AutocompleteField(
-                              label: 'Measure 2',
-                              initialValue: _measure2Text,
-                              suggestions: unitNames,
-                              onChanged: (v) => _measure2Text = v,
-                            ),
-                          ),
-                          Expanded(
-                            child: AutocompleteField(
-                              label: 'Measure 3',
-                              initialValue: _measure3Text,
-                              suggestions: unitNames,
-                              onChanged: (v) => _measure3Text = v,
-                            ),
-                          ),
-                        ]),
-                        _row([
-                          Expanded(
-                            child: AutocompleteField(
-                              label: 'Valuation unit',
-                              initialValue: _valuationText,
-                              suggestions: unitNames,
-                              onChanged: (v) => _valuationText = v,
-                            ),
-                          ),
-                          Expanded(
-                            child: NumberField(label: 'Total grams', initialValue: _e.totalGrams, onChanged: (v) => _e.totalGrams = v?.toDouble()),
-                          ),
-                        ]),
-                        _row([
-                          Expanded(
-                            child: AutocompleteField(
-                              label: 'Output X unit',
-                              initialValue: _outputXText,
-                              suggestions: unitNames,
-                              onChanged: (v) => _outputXText = v,
-                            ),
-                          ),
-                          Expanded(
-                            child: NumberField(label: 'Output X value', initialValue: _e.outputXValue, onChanged: (v) => _e.outputXValue = v?.toDouble()),
-                          ),
-                        ]),
-                        _row([
-                          Expanded(
-                            child: AutocompleteField(
-                              label: 'Chosen output Y unit',
-                              initialValue: _outputYText,
-                              suggestions: unitNames,
-                              onChanged: (v) => _outputYText = v,
-                            ),
-                          ),
-                          Expanded(
-                            child: NumberField(label: 'Val grams', initialValue: _e.valGrams, onChanged: (v) => _e.valGrams = v?.toDouble()),
-                          ),
-                        ]),
-                        _row([
-                          Expanded(child: NumberField(label: 'Sales calc', initialValue: _e.salesCalc, onChanged: (v) => _e.salesCalc = v?.toDouble())),
-                          Expanded(child: NumberField(label: 'Price in pence', initialValue: _e.priceInPence, onChanged: (v) => _e.priceInPence = v?.toDouble())),
-                        ]),
-                        _row([
-                          Expanded(child: NumberField(label: 'Total sale in pence', initialValue: _e.totalSaleInPence, onChanged: (v) => _e.totalSaleInPence = v?.toDouble())),
-                          Expanded(child: NumberField(label: 'Pence per output Y', initialValue: _e.pencePerOutputY, onChanged: (v) => _e.pencePerOutputY = v?.toDouble())),
-                        ]),
-                      ],
-                    ),
                   ],
                 ),
               ),
@@ -383,7 +448,8 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                     child: const Text('Cancel'),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton(onPressed: _save, child: const Text('Save changes')),
+                  FilledButton(
+                      onPressed: _save, child: const Text('Save changes')),
                 ],
               ),
             ),
@@ -405,5 +471,107 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
           spacing: 12,
           children: children,
         ),
+      );
+}
+
+/// Live view of what the entry currently computes to.
+///
+/// These were stored columns in the source spreadsheet. They are derived here,
+/// so an editor can see immediately what a change to a quantity, measure or
+/// price does — and, importantly, when it produces no answer at all.
+class _CalculationPreview extends StatelessWidget {
+  const _CalculationPreview({required this.entry});
+  final PriceEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final c = entry.calculate();
+    final outputName = entry.outputY?.name ?? 'output unit';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.calculate_outlined, size: 18, color: scheme.primary),
+              const SizedBox(width: 8),
+              Text('Calculated', style: Theme.of(context).textTheme.titleSmall),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _line(context, 'Total (metric)', formatPence(c.totalMetric)),
+          _line(context, 'Price as pence', formatPence(c.priceInPence)),
+          _line(context, 'Valuation count', formatPence(c.valuationCount)),
+          _line(context, 'Total sale in pence', formatPence(c.totalSaleInPence)),
+          _line(context, 'Output X value', formatPence(c.outputXValue)),
+          _line(context, 'Pence per $outputName',
+              formatPence(c.pencePerOutputY), emphasise: true),
+          if (c.unresolvedMeasures > 0) ...[
+            const SizedBox(height: 8),
+            _note(
+              context,
+              '${c.unresolvedMeasures} measure'
+              '${c.unresolvedMeasures == 1 ? '' : 's'} with a quantity but no '
+              'metric value on record, so the total is an undercount.',
+              scheme.error,
+            ),
+          ],
+          if (!c.hasPricePerOutput) ...[
+            const SizedBox(height: 8),
+            _note(
+              context,
+              c.totalMetric == 0
+                  ? 'No price per unit: nothing in this entry resolves to a '
+                      'quantity to divide by. The source records the same gap.'
+                  : 'No price per unit: the output or valuation unit has no '
+                      'metric value on record.',
+              scheme.onSurfaceVariant,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _line(BuildContext context, String label, String value,
+      {bool emphasise = false}) {
+    final style = emphasise
+        ? Theme.of(context).textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: Theme.of(context).colorScheme.primary)
+        : Theme.of(context).textTheme.bodySmall;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.bodySmall),
+          Text(value, style: style),
+        ],
+      ),
+    );
+  }
+
+  Widget _note(BuildContext context, String text, Color color) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline, size: 14, color: color),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(text,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: color)),
+          ),
+        ],
       );
 }

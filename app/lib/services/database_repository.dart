@@ -8,6 +8,11 @@ const _uuid = Uuid();
 
 /// All reads/writes against the opened sqlite database go through here.
 /// Keeps the SQL in one place and gives the UI a small, typed surface.
+///
+/// The database holds recorded facts only; derived figures are computed by
+/// `pricing.dart`. What this class must supply for that to work is the metric
+/// value behind every measure and standard, which is why the entry query
+/// carries `metric_value` alongside each name.
 class DatabaseRepository {
   DatabaseRepository(this._svc);
 
@@ -15,21 +20,22 @@ class DatabaseRepository {
   CommonDatabase get _db => _svc.db;
 
   static const _entryColumns = '''
-    pe.entry_id, pe.legacy_entry_no, pe.year, pe.time_period_id, tp.name AS time_period_name,
-    pe.day_of_month, pe.place_id, pl.locality, co.name AS county,
+    pe.entry_id, pe.legacy_entry_no, pe.year,
+    pe.time_period_id, tp.name AS time_period_name, pe.day_of_month,
+    pe.place_id, pl.locality, co.name AS county,
     pe.specific_id, cat.name AS category, sub.name AS subcategory, sp.name AS specific,
-    pe.unit_1, pe.unit_2, pe.unit_3, pe.multiplier_workers, pe.pounds, pe.shillings, pe.pence,
-    pe.status_info,
-    pe.measure_1_unit_id, m1.name AS measure_1_name,
-    pe.measure_2_unit_id, m2.name AS measure_2_name,
-    pe.measure_3_unit_id, m3.name AS measure_3_name,
-    pe.multiplier_workers_measure_id, mm.name AS multiplier_measure_name,
-    pe.total_grams,
-    pe.valuation_measure_unit_id, vm.name AS valuation_unit_name,
-    pe.output_x_unit_id, ox.name AS output_x_name,
-    pe.chosen_output_y_unit_id, oy.name AS output_y_name,
-    pe.output_x_value, pe.val_grams, pe.sales_calc, pe.price_in_pence,
-    pe.total_sale_in_pence, pe.pence_per_output_y,
+    pe.unit_1, pe.unit_2, pe.unit_3,
+    pe.measure_1_id, m1.name AS measure_1_name, m1.metric_value AS measure_1_metric,
+    pe.measure_2_id, m2.name AS measure_2_name, m2.metric_value AS measure_2_metric,
+    pe.measure_3_id, m3.name AS measure_3_name, m3.metric_value AS measure_3_metric,
+    pe.multiplier_workers,
+    pe.multiplier_measure_id, mm.name AS multiplier_measure_name,
+    pe.pounds, pe.shillings, pe.pence,
+    pe.valuation_measure_id, vm.name AS valuation_measure_name,
+      vm.metric_value AS valuation_measure_metric,
+    pe.output_x_standard_id, ox.name AS output_x_name, ox.metric_value AS output_x_metric,
+    pe.output_y_standard_id, oy.name AS output_y_name, oy.metric_value AS output_y_metric,
+    pe.status_info, pe.food,
     pe.country_id, ctry.name AS country_name,
     pe.coin_type_id, coin.name AS coin_type_name,
     pe.information, pe.source_id, src.citation AS source_citation, pe.page
@@ -43,23 +49,19 @@ class DatabaseRepository {
     LEFT JOIN subcategories sub ON sp.subcategory_id = sub.subcategory_id
     LEFT JOIN categories cat ON sub.category_id = cat.category_id
     LEFT JOIN time_periods tp ON pe.time_period_id = tp.time_period_id
-    LEFT JOIN units m1 ON pe.measure_1_unit_id = m1.unit_id
-    LEFT JOIN units m2 ON pe.measure_2_unit_id = m2.unit_id
-    LEFT JOIN units m3 ON pe.measure_3_unit_id = m3.unit_id
-    LEFT JOIN multiplier_measures mm ON pe.multiplier_workers_measure_id = mm.multiplier_measure_id
-    LEFT JOIN units vm ON pe.valuation_measure_unit_id = vm.unit_id
-    LEFT JOIN units ox ON pe.output_x_unit_id = ox.unit_id
-    LEFT JOIN units oy ON pe.chosen_output_y_unit_id = oy.unit_id
+    LEFT JOIN measures m1 ON pe.measure_1_id = m1.measure_id
+    LEFT JOIN measures m2 ON pe.measure_2_id = m2.measure_id
+    LEFT JOIN measures m3 ON pe.measure_3_id = m3.measure_id
+    LEFT JOIN measures vm ON pe.valuation_measure_id = vm.measure_id
+    LEFT JOIN multiplier_measures mm ON pe.multiplier_measure_id = mm.multiplier_measure_id
+    LEFT JOIN standards ox ON pe.output_x_standard_id = ox.standard_id
+    LEFT JOIN standards oy ON pe.output_y_standard_id = oy.standard_id
     LEFT JOIN countries ctry ON pe.country_id = ctry.country_id
     LEFT JOIN coin_types coin ON pe.coin_type_id = coin.coin_type_id
     LEFT JOIN sources src ON pe.source_id = src.source_id
   ''';
 
   PriceEntry _rowToEntry(Row r) {
-    // Defensive casts: a handful of source cells hold Excel formula-error
-    // text (e.g. "#N/A") in what's otherwise a numeric column. Treat
-    // anything that isn't actually a number/string as absent rather than
-    // crashing the whole load.
     double? d(String c) {
       final v = r[c];
       return v is num ? v.toDouble() : null;
@@ -74,6 +76,13 @@ class DatabaseRepository {
       final v = r[c];
       if (v == null) return null;
       return v is String ? v : v.toString();
+    }
+
+    /// Rebuilds a lookup item from the three columns the query carries for it.
+    MetricItem? metric(String idCol, String nameCol, String metricCol) {
+      final id = s(idCol);
+      if (id == null) return null;
+      return MetricItem(id, s(nameCol) ?? '(unnamed)', d(metricCol));
     }
 
     return PriceEntry(
@@ -93,32 +102,21 @@ class DatabaseRepository {
       unit1: d('unit_1'),
       unit2: d('unit_2'),
       unit3: d('unit_3'),
+      measure1: metric('measure_1_id', 'measure_1_name', 'measure_1_metric'),
+      measure2: metric('measure_2_id', 'measure_2_name', 'measure_2_metric'),
+      measure3: metric('measure_3_id', 'measure_3_name', 'measure_3_metric'),
       multiplierWorkers: d('multiplier_workers'),
+      multiplierMeasureId: s('multiplier_measure_id'),
+      multiplierMeasureName: s('multiplier_measure_name'),
       pounds: d('pounds'),
       shillings: d('shillings'),
       pence: d('pence'),
+      valuationMeasure: metric(
+          'valuation_measure_id', 'valuation_measure_name', 'valuation_measure_metric'),
+      outputX: metric('output_x_standard_id', 'output_x_name', 'output_x_metric'),
+      outputY: metric('output_y_standard_id', 'output_y_name', 'output_y_metric'),
       statusInfo: s('status_info'),
-      measure1UnitId: s('measure_1_unit_id'),
-      measure1Name: s('measure_1_name'),
-      measure2UnitId: s('measure_2_unit_id'),
-      measure2Name: s('measure_2_name'),
-      measure3UnitId: s('measure_3_unit_id'),
-      measure3Name: s('measure_3_name'),
-      multiplierMeasureId: s('multiplier_workers_measure_id'),
-      multiplierMeasureName: s('multiplier_measure_name'),
-      totalGrams: d('total_grams'),
-      valuationUnitId: s('valuation_measure_unit_id'),
-      valuationUnitName: s('valuation_unit_name'),
-      outputXUnitId: s('output_x_unit_id'),
-      outputXName: s('output_x_name'),
-      outputYUnitId: s('chosen_output_y_unit_id'),
-      outputYName: s('output_y_name'),
-      outputXValue: d('output_x_value'),
-      valGrams: d('val_grams'),
-      salesCalc: d('sales_calc'),
-      priceInPence: d('price_in_pence'),
-      totalSaleInPence: d('total_sale_in_pence'),
-      pencePerOutputY: d('pence_per_output_y'),
+      food: s('food'),
       countryId: s('country_id'),
       countryName: s('country_name'),
       coinTypeId: s('coin_type_id'),
@@ -133,11 +131,12 @@ class DatabaseRepository {
   int get totalEntryCount =>
       _db.select('SELECT COUNT(*) AS n FROM price_entries').first['n'] as int;
 
-  /// Loads every price entry with all dimension names resolved. For ~10k
-  /// rows this is comfortably fast in-memory; filtering/sorting happens in
-  /// Dart on the resulting list.
+  /// Loads every price entry with all dimension names and metric values
+  /// resolved. For ~10k rows this is comfortably fast in-memory; filtering and
+  /// sorting then happen in Dart on the resulting list.
   List<PriceEntry> loadAllEntries() {
-    final rows = _db.select('SELECT $_entryColumns $_entryJoins ORDER BY pe.legacy_entry_no');
+    final rows =
+        _db.select('SELECT $_entryColumns $_entryJoins ORDER BY pe.legacy_entry_no');
     return rows.map(_rowToEntry).toList();
   }
 
@@ -156,6 +155,8 @@ class DatabaseRepository {
         .first;
     return ((r['lo'] as int?) ?? 1270, (r['hi'] as int?) ?? 1500);
   }
+
+  // ----------------------------------------------------------- dimensions --
 
   List<LookupItem> get counties => _db
       .select('SELECT county_id, name FROM counties ORDER BY name')
@@ -188,7 +189,8 @@ class DatabaseRepository {
 
   List<SubcategoryOption> subcategoriesOf(String categoryId) => _db
       .select(
-        'SELECT subcategory_id, category_id, name FROM subcategories WHERE category_id = ? ORDER BY name',
+        'SELECT subcategory_id, category_id, name FROM subcategories '
+        'WHERE category_id = ? ORDER BY name',
         [categoryId],
       )
       .map((r) => SubcategoryOption(
@@ -200,7 +202,8 @@ class DatabaseRepository {
 
   List<SpecificOption> specificsOf(String subcategoryId) => _db
       .select(
-        'SELECT specific_id, subcategory_id, name FROM specifics WHERE subcategory_id = ? ORDER BY name',
+        'SELECT specific_id, subcategory_id, name FROM specifics '
+        'WHERE subcategory_id = ? ORDER BY name',
         [subcategoryId],
       )
       .map((r) => SpecificOption(
@@ -210,10 +213,27 @@ class DatabaseRepository {
           ))
       .toList();
 
-  List<LookupItem> get units => _db
-      .select('SELECT unit_id, name FROM units ORDER BY name')
-      .map((r) => LookupItem(r['unit_id'] as String, r['name'] as String))
+  List<MetricItem> _metricItems(String table, String idCol) => _db
+      .select('SELECT $idCol, name, metric_value FROM $table ORDER BY name')
+      .map((r) => MetricItem(
+            r[idCol] as String,
+            r['name'] as String,
+            (r['metric_value'] as num?)?.toDouble(),
+          ))
       .toList();
+
+  /// The vocabulary for MEASURE 1/2/3 and the valuation measure.
+  List<MetricItem> get measures => _metricItems('measures', 'measure_id');
+
+  /// The vocabulary for output X and output Y — a different table from
+  /// [measures] on purpose.
+  List<MetricItem> get standards => _metricItems('standards', 'standard_id');
+
+  /// The standards a reader can meaningfully ask for a price "per". Anything
+  /// without a metric value cannot produce an answer, so offering it would
+  /// only ever yield a dash.
+  List<MetricItem> get outputUnitChoices =>
+      standards.where((s) => s.isResolved).toList();
 
   List<LookupItem> get sources => _db
       .select('SELECT source_id, citation FROM sources ORDER BY citation')
@@ -225,6 +245,22 @@ class DatabaseRepository {
       .map((r) => LookupItem(r['time_period_id'] as String, r['name'] as String))
       .toList();
 
+  List<LookupItem> get multiplierMeasures => _db
+      .select('SELECT multiplier_measure_id, name FROM multiplier_measures ORDER BY name')
+      .map((r) =>
+          LookupItem(r['multiplier_measure_id'] as String, r['name'] as String))
+      .toList();
+
+  List<LookupItem> get countries => _db
+      .select('SELECT country_id, name FROM countries ORDER BY name')
+      .map((r) => LookupItem(r['country_id'] as String, r['name'] as String))
+      .toList();
+
+  List<LookupItem> get coinTypes => _db
+      .select('SELECT coin_type_id, name FROM coin_types ORDER BY name')
+      .map((r) => LookupItem(r['coin_type_id'] as String, r['name'] as String))
+      .toList();
+
   // ---------------------------------------------------------------- writes --
 
   /// Persists every editable field of [entry] back to price_entries.
@@ -232,25 +268,24 @@ class DatabaseRepository {
     _db.execute(
       '''UPDATE price_entries SET
         year = ?, time_period_id = ?, day_of_month = ?, place_id = ?, specific_id = ?,
-        unit_1 = ?, unit_2 = ?, unit_3 = ?, multiplier_workers = ?,
-        pounds = ?, shillings = ?, pence = ?, status_info = ?,
-        measure_1_unit_id = ?, measure_2_unit_id = ?, measure_3_unit_id = ?,
-        multiplier_workers_measure_id = ?, total_grams = ?,
-        valuation_measure_unit_id = ?, output_x_unit_id = ?, chosen_output_y_unit_id = ?,
-        output_x_value = ?, val_grams = ?, sales_calc = ?, price_in_pence = ?,
-        total_sale_in_pence = ?, pence_per_output_y = ?,
-        country_id = ?, coin_type_id = ?, information = ?, source_id = ?, page = ?
+        unit_1 = ?, unit_2 = ?, unit_3 = ?,
+        measure_1_id = ?, measure_2_id = ?, measure_3_id = ?,
+        multiplier_workers = ?, multiplier_measure_id = ?,
+        pounds = ?, shillings = ?, pence = ?,
+        valuation_measure_id = ?, output_x_standard_id = ?, output_y_standard_id = ?,
+        status_info = ?, food = ?, country_id = ?, coin_type_id = ?,
+        information = ?, source_id = ?, page = ?
       WHERE entry_id = ?''',
       [
-        entry.year, entry.timePeriodId, entry.dayOfMonth, entry.placeId, entry.specificId,
-        entry.unit1, entry.unit2, entry.unit3, entry.multiplierWorkers,
-        entry.pounds, entry.shillings, entry.pence, entry.statusInfo,
-        entry.measure1UnitId, entry.measure2UnitId, entry.measure3UnitId,
-        entry.multiplierMeasureId, entry.totalGrams,
-        entry.valuationUnitId, entry.outputXUnitId, entry.outputYUnitId,
-        entry.outputXValue, entry.valGrams, entry.salesCalc, entry.priceInPence,
-        entry.totalSaleInPence, entry.pencePerOutputY,
-        entry.countryId, entry.coinTypeId, entry.information, entry.sourceId, entry.page,
+        entry.year, entry.timePeriodId, entry.dayOfMonth, entry.placeId,
+        entry.specificId,
+        entry.unit1, entry.unit2, entry.unit3,
+        entry.measure1?.id, entry.measure2?.id, entry.measure3?.id,
+        entry.multiplierWorkers, entry.multiplierMeasureId,
+        entry.pounds, entry.shillings, entry.pence,
+        entry.valuationMeasure?.id, entry.outputX?.id, entry.outputY?.id,
+        entry.statusInfo, entry.food, entry.countryId, entry.coinTypeId,
+        entry.information, entry.sourceId, entry.page,
         entry.entryId,
       ],
     );
@@ -271,7 +306,8 @@ class DatabaseRepository {
         countyId = existing.first['county_id'] as String;
       } else {
         countyId = _uuid.v4();
-        _db.execute('INSERT INTO counties(county_id, name) VALUES (?, ?)', [countyId, trimmedCounty]);
+        _db.execute('INSERT INTO counties(county_id, name) VALUES (?, ?)',
+            [countyId, trimmedCounty]);
       }
     }
 
@@ -292,68 +328,91 @@ class DatabaseRepository {
 
   /// Walks category -> subcategory -> specific, creating any missing level,
   /// and returns the leaf specific_id.
-  String resolveOrCreateSpecificChain(String category, String subcategory, String specific) {
-    String findOrInsert(String table, String idCol, String nameCol, String name,
+  String resolveOrCreateSpecificChain(
+      String category, String subcategory, String specific) {
+    String findOrInsert(String table, String idCol, String name,
         {String? parentCol, String? parentId}) {
       final whereParent = parentCol != null ? ' AND $parentCol = ?' : '';
       final args = parentCol != null ? [name, parentId] : [name];
       final existing = _db.select(
-        'SELECT $idCol FROM $table WHERE $nameCol = ?$whereParent',
+        'SELECT $idCol FROM $table WHERE name = ?$whereParent',
         args,
       );
       if (existing.isNotEmpty) return existing.first[idCol] as String;
       final id = _uuid.v4();
       if (parentCol != null) {
         _db.execute(
-          'INSERT INTO $table($idCol, $parentCol, $nameCol) VALUES (?, ?, ?)',
+          'INSERT INTO $table($idCol, $parentCol, name) VALUES (?, ?, ?)',
           [id, parentId, name],
         );
       } else {
-        _db.execute('INSERT INTO $table($idCol, $nameCol) VALUES (?, ?)', [id, name]);
+        _db.execute('INSERT INTO $table($idCol, name) VALUES (?, ?)', [id, name]);
       }
       return id;
     }
 
-    final categoryId = findOrInsert('categories', 'category_id', 'name', category.trim());
+    final categoryId = findOrInsert('categories', 'category_id', category.trim());
     final subcategoryId = findOrInsert(
-      'subcategories', 'subcategory_id', 'name', subcategory.trim(),
+      'subcategories', 'subcategory_id', subcategory.trim(),
       parentCol: 'category_id', parentId: categoryId,
     );
     return findOrInsert(
-      'specifics', 'specific_id', 'name', specific.trim(),
+      'specifics', 'specific_id', specific.trim(),
       parentCol: 'subcategory_id', parentId: subcategoryId,
     );
   }
 
-  List<LookupItem> get multiplierMeasures => _db
-      .select('SELECT multiplier_measure_id, name FROM multiplier_measures ORDER BY name')
-      .map((r) => LookupItem(r['multiplier_measure_id'] as String, r['name'] as String))
-      .toList();
+  /// Finds a measure or standard by name, creating it with no metric value if
+  /// it is new.
+  ///
+  /// A newly invented unit deliberately has `metric_value` NULL: we do not know
+  /// what one of it is worth in metric, and guessing would silently corrupt
+  /// every figure derived from it. It will contribute zero until someone fills
+  /// the value in, which is the same thing the source spreadsheet does.
+  MetricItem? _resolveOrCreateMetric(
+      String table, String idCol, String? name) {
+    if (name == null || name.trim().isEmpty) return null;
+    final trimmed = name.trim().replaceAll('"', '');
+    final existing = _db.select(
+      'SELECT $idCol, name, metric_value FROM $table WHERE name = ?',
+      [trimmed],
+    );
+    if (existing.isNotEmpty) {
+      final r = existing.first;
+      return MetricItem(
+        r[idCol] as String,
+        r['name'] as String,
+        (r['metric_value'] as num?)?.toDouble(),
+      );
+    }
+    final id = _uuid.v4();
+    _db.execute(
+      'INSERT INTO $table($idCol, name, metric_value) VALUES (?, ?, NULL)',
+      [id, trimmed],
+    );
+    return MetricItem(id, trimmed, null);
+  }
 
-  List<LookupItem> get countries => _db
-      .select('SELECT country_id, name FROM countries ORDER BY name')
-      .map((r) => LookupItem(r['country_id'] as String, r['name'] as String))
-      .toList();
+  MetricItem? resolveOrCreateMeasure(String? name) =>
+      _resolveOrCreateMetric('measures', 'measure_id', name);
 
-  List<LookupItem> get coinTypes => _db
-      .select('SELECT coin_type_id, name FROM coin_types ORDER BY name')
-      .map((r) => LookupItem(r['coin_type_id'] as String, r['name'] as String))
-      .toList();
+  MetricItem? resolveOrCreateStandard(String? name) =>
+      _resolveOrCreateMetric('standards', 'standard_id', name);
 
   /// Finds a lookup row by name in a single-column-key table, creating it if
   /// it doesn't exist yet. Returns null for blank input.
-  String? _resolveOrCreate(String table, String idCol, String nameCol, String? name) {
+  String? _resolveOrCreate(
+      String table, String idCol, String nameCol, String? name) {
     if (name == null || name.trim().isEmpty) return null;
     final trimmed = name.trim();
-    final existing = _db.select('SELECT $idCol FROM $table WHERE $nameCol = ?', [trimmed]);
+    final existing =
+        _db.select('SELECT $idCol FROM $table WHERE $nameCol = ?', [trimmed]);
     if (existing.isNotEmpty) return existing.first[idCol] as String;
     final id = _uuid.v4();
     _db.execute('INSERT INTO $table($idCol, $nameCol) VALUES (?, ?)', [id, trimmed]);
     return id;
   }
 
-  String? resolveOrCreateUnit(String? name) =>
-      _resolveOrCreate('units', 'unit_id', 'name', name);
   String? resolveOrCreateSource(String? citation) =>
       _resolveOrCreate('sources', 'source_id', 'citation', citation);
   String? resolveOrCreateCountry(String? name) =>
@@ -363,5 +422,6 @@ class DatabaseRepository {
   String? resolveOrCreateTimePeriod(String? name) =>
       _resolveOrCreate('time_periods', 'time_period_id', 'name', name);
   String? resolveOrCreateMultiplierMeasure(String? name) =>
-      _resolveOrCreate('multiplier_measures', 'multiplier_measure_id', 'name', name);
+      _resolveOrCreate(
+          'multiplier_measures', 'multiplier_measure_id', 'name', name);
 }
