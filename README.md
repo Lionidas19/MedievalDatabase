@@ -5,8 +5,12 @@ A normalized SQLite database of English price records from the 1270s–80s
 Vol. 2), plus a Flutter web app for browsing, filtering, sorting and editing
 it.
 
-10,379 price entries covering 1270–1291, across 789 places, 66 counties and
+7,800 price entries covering 1270–1291, across 244 localities, 66 counties and
 633 specific goods and services.
+
+The Data sheet runs to 10,379 rows, but everything from row 7801 onward is an
+unfilled template row carrying only dropdown defaults — no year, place,
+category, quantity or price. Those are skipped on import.
 
 ## Layout
 
@@ -15,9 +19,12 @@ Copy of 1270s80sDatabase.xlsx    the source spreadsheet — the source of truth
 tools/build_normalized_db.py     rebuilds the sqlite database from it
 tools/CALCULATIONS.md            how the spreadsheet's formulas work
 tools/dump_formulas.py           recovers those formulas from the workbook
+tools/dimensions.py              works out what kind of thing each unit measures
 tools/validate_calculations.py   checks our results against the spreadsheet's
+tools/build_review_db.py         builds the questions file for the researcher
 app/                             the Flutter viewer/editor app
 app/data/                        the database the app ships with
+review/                          questions awaiting the researcher's answers
 ```
 
 ## What lives where
@@ -139,9 +146,11 @@ flutter test
 ```
 
 Runs on the Dart VM — no browser, no WASM. Alongside the unit tests,
-`calculation_corpus_test.dart` replays all 10,379 entries through the
+`calculation_corpus_test.dart` replays all 7,800 entries through the
 calculator and compares every derived value against what the spreadsheet
-computed for the same entry.
+computed for the same entry. 7,799 agree on all six; the one exception is
+entry 7292 and it is listed explicitly so that it cannot rot into a silent
+regression.
 
 To re-check against the database directly and regenerate that corpus:
 
