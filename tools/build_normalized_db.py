@@ -1,22 +1,98 @@
-import openpyxl
+"""Rebuilds the SQLite database from the source spreadsheet.
+
+The spreadsheet is the source of truth; this script only ever reads it. The
+database it produces holds *recorded facts only* -- every value the sheet
+derived by formula is left out, to be computed in application code instead.
+The recovered formulas are documented in tools/CALCULATIONS.md.
+
+Two things here are easy to get wrong and are called out in the schema below:
+
+  * MEASURE 1/2/3 and Valuation Measure are looked up in the Measures sheet,
+    but OUTPUT X and CHOSEN OUTPUT Y are looked up in Standards. Those are
+    two distinct vocabularies -- 586 names, 3 of them shared -- and 69 of the
+    97 Standards entries have no counterpart in Measures at all. They get
+    separate tables; merging them loses data the calculations depend on.
+
+  * A name used by the Data sheet that is missing from its lookup sheet is
+    still inserted, with metric_value NULL. That preserves what the record
+    actually says and reproduces the sheet's own behaviour: an unresolvable
+    measure contributes zero rather than failing the row.
+
+    pip install openpyxl
+    python tools/build_normalized_db.py
+"""
+import os
 import sqlite3
 import uuid
-import os
+from collections import Counter
+
+import openpyxl
 
 # Paths are relative to the repo root (this script lives in tools/).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(_REPO_ROOT, "Copy of 1270s80sDatabase.xlsx")
 OUT = os.path.join(_REPO_ROOT, "app", "data", "1270s80sDatabase_normalized.sqlite")
-SAMPLE_SIZE = None  # None = convert every row
+
+# Last populated row of each sheet.
+PLACES_LAST_ROW = 711
+CATEGORIES_LAST_ROW = 592
+MEASURES_LAST_ROW = 492
+STANDARDS_LAST_ROW = 99
+DATA_FIRST_ROW = 3
+DATA_LAST_ROW = 10381
 
 if os.path.exists(OUT):
     os.remove(OUT)
 
-wb = openpyxl.load_workbook(SRC, data_only=True)
+# read_only streams the sheets instead of building a cell object per cell,
+# which turns a multi-minute load into a few seconds. data_only gives us the
+# cached results rather than the formula text.
+wb = openpyxl.load_workbook(SRC, data_only=True, read_only=True)
 
 
 def new_id():
     return str(uuid.uuid4())
+
+
+def rows_of(sheet, first_row, last_row):
+    """Streams (row_number, values_tuple). Indices into the tuple are 0-based,
+    so spreadsheet column N is values[N - 1]."""
+    ws = wb[sheet]
+    for i, values in enumerate(
+        ws.iter_rows(min_row=first_row, max_row=last_row, values_only=True),
+        start=first_row,
+    ):
+        yield i, values
+
+
+def at(values, col):
+    """Spreadsheet column number -> value, tolerating short rows."""
+    return values[col - 1] if len(values) >= col else None
+
+
+def as_num(v):
+    """Numbers only. Some cells hold cached formula-error text ('#N/A',
+    '#DIV/0!') in otherwise numeric columns; those are not values."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def as_int(v):
+    n = as_num(v)
+    return int(n) if n is not None else None
+
+
+def as_text(v):
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def norm_key(v):
+    """The normalisation the sheet's formulas apply before MATCH():
+    REGEXREPLACE(TEXT(x,"@"), '"', '') -- coerce to text, strip quotes."""
+    s = as_text(v)
+    return s.replace('"', "").strip() if s else None
 
 
 # ---------------------------------------------------------------- schema ----
@@ -44,47 +120,66 @@ CREATE TABLE categories (
 
 CREATE TABLE subcategories (
     subcategory_id TEXT PRIMARY KEY,
-    category_id     TEXT NOT NULL REFERENCES categories(category_id),
-    name             TEXT NOT NULL,
+    category_id    TEXT NOT NULL REFERENCES categories(category_id),
+    name           TEXT NOT NULL,
     UNIQUE(category_id, name)
 );
 
 CREATE TABLE specifics (
-    specific_id      TEXT PRIMARY KEY,
-    subcategory_id   TEXT NOT NULL REFERENCES subcategories(subcategory_id),
-    name             TEXT NOT NULL,
+    specific_id    TEXT PRIMARY KEY,
+    subcategory_id TEXT NOT NULL REFERENCES subcategories(subcategory_id),
+    name           TEXT NOT NULL,
     UNIQUE(subcategory_id, name)
 );
 
-CREATE TABLE units (
-    unit_id     TEXT PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE
+-- The Measures sheet: historic units of measurement, and what one of each is
+-- worth in metric. Keyed on Measures!B, valued from Measures!C "Metric Value".
+-- Despite the old total_grams/val_grams column names the value is metric per
+-- dimension, not mass -- an acre is 4046.85 square metres.
+-- Used by: MEASURE 1/2/3, Valuation Measure.
+CREATE TABLE measures (
+    measure_id   TEXT PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,
+    metric_value REAL,      -- NULL when the sheet has no usable number
+    sheet_row    INTEGER    -- provenance back into Measures
 );
 
--- long/junction form of the "Measures" sheet matrix (unit -> many target-unit rates)
-CREATE TABLE unit_conversions (
-    conversion_id   TEXT PRIMARY KEY,
-    unit_id         TEXT NOT NULL REFERENCES units(unit_id),
-    target_unit     TEXT NOT NULL,
-    target_col_ix   INTEGER NOT NULL,
-    rate            REAL
+-- The Standards sheet: an independent vocabulary, NOT an abridged copy of
+-- Measures (69 of its 97 entries appear nowhere in Measures). Keyed on
+-- Standards!A, valued from Standards!B "Metric".
+-- Used by: OUTPUT X, CHOSEN OUTPUT Y.
+CREATE TABLE standards (
+    standard_id  TEXT PRIMARY KEY,
+    name         TEXT NOT NULL UNIQUE,
+    metric_value REAL,
+    sheet_row    INTEGER
 );
 
--- long/junction form of the "Standards" sheet matrix (unit -> weight-standard values)
-CREATE TABLE unit_standards (
-    standard_id     TEXT PRIMARY KEY,
-    unit_id         TEXT NOT NULL REFERENCES units(unit_id),
-    standard_name   TEXT NOT NULL,
-    target_col_ix   INTEGER NOT NULL,
-    value           REAL
+-- The remaining columns of each sheet, in long form. No calculation reads
+-- these -- only the metric_value above is load-bearing -- but they are part
+-- of the source and may support alternative output units later.
+CREATE TABLE measure_conversions (
+    conversion_id TEXT PRIMARY KEY,
+    measure_id    TEXT NOT NULL REFERENCES measures(measure_id),
+    target_name   TEXT NOT NULL,
+    value         REAL
 );
 
--- long/junction form of the "Places" sheet matrix (place -> region-specific unit definitions)
-CREATE TABLE place_unit_overrides (
-    override_id     TEXT PRIMARY KEY,
-    place_id        TEXT NOT NULL REFERENCES places(place_id),
-    unit_id         TEXT NOT NULL REFERENCES units(unit_id),
-    definition      TEXT
+CREATE TABLE standard_conversions (
+    conversion_id TEXT PRIMARY KEY,
+    standard_id   TEXT NOT NULL REFERENCES standards(standard_id),
+    target_name   TEXT NOT NULL,
+    value         REAL
+);
+
+-- Region-specific unit definitions from the Places sheet. The researcher's
+-- brief describes this sheet as a data-entry aid that "is not referenced by
+-- the data", and no formula reads it. Retained as reference only.
+CREATE TABLE place_measure_overrides (
+    override_id TEXT PRIMARY KEY,
+    place_id    TEXT NOT NULL REFERENCES places(place_id),
+    measure_id  TEXT NOT NULL REFERENCES measures(measure_id),
+    definition  TEXT
 );
 
 CREATE TABLE sources (
@@ -102,53 +197,79 @@ CREATE TABLE coin_types (
     name         TEXT NOT NULL UNIQUE
 );
 
--- covers both calendar months ('May') and the non-month time references the
--- sheet also used in this column ('Michaelmas Term', 'Autumn', 'Christmas')
+-- Covers both calendar months ('May') and the non-month time references the
+-- sheet also used in this column ('Michaelmas Term', 'Autumn', 'Christmas').
 CREATE TABLE time_periods (
     time_period_id TEXT PRIMARY KEY,
     name           TEXT NOT NULL UNIQUE
 );
 
+-- What the Multiplier/Workers count refers to. No formula reads this; the
+-- brief calls it "a likely unnecessary column". Kept because it is recorded.
 CREATE TABLE multiplier_measures (
     multiplier_measure_id TEXT PRIMARY KEY,
-    name                   TEXT NOT NULL UNIQUE
+    name                  TEXT NOT NULL UNIQUE
 );
 
+-- Recorded facts only. Every column the spreadsheet derived by formula --
+-- Total Grams, Val Meas in Grams, Val Meas Number, Val Meas Price per Numb
+-- in Pence, Total Sale in Pence, Output X Value, Pence per Output Y -- is
+-- deliberately absent and belongs in application code. Pence per Output Y in
+-- particular cannot be stored: the unit it is "per" is chosen by the reader.
 CREATE TABLE price_entries (
-    entry_id                    TEXT PRIMARY KEY,
-    legacy_entry_no              INTEGER,
-    year                          INTEGER,
-    time_period_id                TEXT REFERENCES time_periods(time_period_id),
-    day_of_month                  INTEGER,
-    place_id                      TEXT REFERENCES places(place_id),
-    specific_id                   TEXT REFERENCES specifics(specific_id),
-    unit_1                        REAL,
-    unit_2                        REAL,
-    unit_3                        REAL,
-    multiplier_workers            REAL,
-    pounds                        REAL,
-    shillings                     REAL,
-    pence                         REAL,
-    status_info                   TEXT,
-    measure_1_unit_id             TEXT REFERENCES units(unit_id),
-    measure_2_unit_id             TEXT REFERENCES units(unit_id),
-    measure_3_unit_id             TEXT REFERENCES units(unit_id),
-    multiplier_workers_measure_id TEXT REFERENCES multiplier_measures(multiplier_measure_id),
-    total_grams                   REAL,
-    valuation_measure_unit_id     TEXT REFERENCES units(unit_id),
-    output_x_unit_id              TEXT REFERENCES units(unit_id),
-    chosen_output_y_unit_id       TEXT REFERENCES units(unit_id),
-    output_x_value                REAL,
-    val_grams                     REAL,
-    sales_calc                    REAL,
-    price_in_pence                REAL,
-    total_sale_in_pence           REAL,
-    pence_per_output_y            REAL,
-    country_id                    TEXT REFERENCES countries(country_id),
-    coin_type_id                  TEXT REFERENCES coin_types(coin_type_id),
-    information                   TEXT,
-    source_id                     TEXT REFERENCES sources(source_id),
-    page                          INTEGER
+    entry_id              TEXT PRIMARY KEY,
+    legacy_entry_no       INTEGER,
+    year                  INTEGER,
+    time_period_id        TEXT REFERENCES time_periods(time_period_id),
+    day_of_month          INTEGER,
+    place_id              TEXT REFERENCES places(place_id),
+    specific_id           TEXT REFERENCES specifics(specific_id),
+
+    -- quantities, each interpreted by the measure in the matching slot
+    unit_1                REAL,
+    unit_2                REAL,
+    unit_3                REAL,
+    measure_1_id          TEXT REFERENCES measures(measure_id),
+    measure_2_id          TEXT REFERENCES measures(measure_id),
+    measure_3_id          TEXT REFERENCES measures(measure_id),
+
+    multiplier_workers    REAL,
+    multiplier_measure_id TEXT REFERENCES multiplier_measures(multiplier_measure_id),
+
+    -- the recorded price. Often a *unit* price rather than a total, which is
+    -- why the total sale multiplies by the valuation-measure count.
+    pounds                REAL,
+    shillings             REAL,
+    pence                 REAL,
+
+    valuation_measure_id  TEXT REFERENCES measures(measure_id),
+    output_x_standard_id  TEXT REFERENCES standards(standard_id),
+    output_y_standard_id  TEXT REFERENCES standards(standard_id),
+
+    status_info           TEXT,
+    food                  TEXT,   -- payment in kind, where it was not in coin
+    country_id            TEXT REFERENCES countries(country_id),
+    coin_type_id          TEXT REFERENCES coin_types(coin_type_id),
+    information           TEXT,
+    source_id             TEXT REFERENCES sources(source_id),
+    page                  INTEGER
+);
+
+-- What Google Sheets last computed for the derived columns. NOT authoritative
+-- and not read by the app: retained so the reimplementation can be validated
+-- row by row against it (tools/CALCULATIONS.md). Drop once it agrees.
+CREATE TABLE excel_cached_calculations (
+    entry_id                         TEXT PRIMARY KEY REFERENCES price_entries(entry_id),
+    total_grams                      REAL,
+    val_meas_in_grams                REAL,
+    val_meas_number                  REAL,
+    val_meas_price_per_numb_in_pence REAL,
+    total_sale_in_pence              REAL,
+    output_x_value                   REAL,
+    pence_per_output_y               REAL,
+    -- cells that cached an error string instead of a number, e.g.
+    -- 'pence_per_output_y=#DIV/0!'
+    errors                           TEXT
 );
 
 CREATE INDEX idx_price_entries_place ON price_entries(place_id);
@@ -156,38 +277,50 @@ CREATE INDEX idx_price_entries_specific ON price_entries(specific_id);
 CREATE INDEX idx_price_entries_year ON price_entries(year);
 CREATE INDEX idx_price_entries_time_period ON price_entries(time_period_id);
 CREATE INDEX idx_price_entries_country ON price_entries(country_id);
-CREATE INDEX idx_unit_conversions_unit ON unit_conversions(unit_id);
-CREATE INDEX idx_unit_standards_unit ON unit_standards(unit_id);
-CREATE INDEX idx_place_overrides_place ON place_unit_overrides(place_id);
+CREATE INDEX idx_price_entries_measure_1 ON price_entries(measure_1_id);
+CREATE INDEX idx_price_entries_valuation ON price_entries(valuation_measure_id);
+CREATE INDEX idx_price_entries_output_y ON price_entries(output_y_standard_id);
+CREATE INDEX idx_measure_conversions_measure ON measure_conversions(measure_id);
+CREATE INDEX idx_standard_conversions_standard ON standard_conversions(standard_id);
+CREATE INDEX idx_place_overrides_place ON place_measure_overrides(place_id);
 CREATE INDEX idx_subcategories_category ON subcategories(category_id);
 CREATE INDEX idx_specifics_subcategory ON specifics(subcategory_id);
 """)
 
 # ------------------------------------------------------------- lookups ------
-county_ids = {}       # name -> id
-place_ids = {}        # (county_name_or_None, locality) -> id
-locality_index = {}   # locality (first county seen wins) -> place_id, for Data sheet joins
-category_ids = {}     # category name -> id
-subcategory_ids = {}  # (category_id, subcategory name) -> id
-specific_ids = {}     # (subcategory_id, specific name) -> id
-unit_ids = {}         # name -> id
-source_ids = {}       # citation -> id
-country_ids = {}      # name -> id
-coin_type_ids = {}    # name -> id
-time_period_ids = {}  # name -> id
-multiplier_measure_ids = {}  # name -> id
+county_ids = {}              # name -> id
+place_ids = {}               # (county_name_or_None, locality) -> id
+locality_index = {}          # locality -> place_id, for Data sheet joins
+category_ids = {}            # name -> id
+subcategory_ids = {}         # (category_id, name) -> id
+specific_ids = {}            # (subcategory_id, name) -> id
+measure_ids = {}             # name -> id
+standard_ids = {}            # name -> id
+source_ids = {}
+country_ids = {}
+coin_type_ids = {}
+time_period_ids = {}
+multiplier_measure_ids = {}
+
+stats = Counter()
+dropped_duplicates = []      # (sheet, name) rows MATCH() would never reach
+# Names used somewhere but never defined in their lookup sheet, tagged with
+# where they were used. Only the ones used by Data affect a calculation; the
+# Places ones are column headers on a reference-only sheet.
+invented_measures = {}       # name -> 'Data' | 'Places'
+invented_standards = {}      # name -> 'Data'
 
 
 def _get_or_create(cache, table, id_col, name_col, name):
+    name = as_text(name)
     if name is None:
         return None
-    name = str(name).strip() if isinstance(name, str) else name
-    if name == "":
-        return None
     if name not in cache:
-        new_uid = new_id()
-        cache[name] = new_uid
-        cur.execute(f"INSERT INTO {table}({id_col}, {name_col}) VALUES (?, ?)", (new_uid, name))
+        uid = new_id()
+        cache[name] = uid
+        cur.execute(
+            f"INSERT INTO {table}({id_col}, {name_col}) VALUES (?, ?)", (uid, name)
+        )
     return cache[name]
 
 
@@ -205,26 +338,20 @@ def get_or_create_time_period(name):
 
 def get_or_create_multiplier_measure(name):
     return _get_or_create(
-        multiplier_measure_ids, "multiplier_measures", "multiplier_measure_id", "name", name
+        multiplier_measure_ids, "multiplier_measures", "multiplier_measure_id",
+        "name", name,
     )
 
 
-def get_or_create_unit(name):
-    if not name:
-        return None
-    name = str(name).strip()
-    if not name:
-        return None
-    if name not in unit_ids:
-        uid = new_id()
-        unit_ids[name] = uid
-        cur.execute("INSERT INTO units(unit_id, name) VALUES (?, ?)", (uid, name))
-    return unit_ids[name]
+def get_or_create_source(citation):
+    return _get_or_create(source_ids, "sources", "source_id", "citation", citation)
 
 
 def get_or_create_place(locality, county_name=None):
-    if not locality:
+    locality = as_text(locality)
+    if locality is None:
         return None
+    county_name = as_text(county_name)
     key = (county_name, locality)
     if key not in place_ids:
         county_id = None
@@ -232,7 +359,10 @@ def get_or_create_place(locality, county_name=None):
             if county_name not in county_ids:
                 cid = new_id()
                 county_ids[county_name] = cid
-                cur.execute("INSERT INTO counties(county_id, name) VALUES (?, ?)", (cid, county_name))
+                cur.execute(
+                    "INSERT INTO counties(county_id, name) VALUES (?, ?)",
+                    (cid, county_name),
+                )
             county_id = county_ids[county_name]
         pid = new_id()
         place_ids[key] = pid
@@ -245,8 +375,9 @@ def get_or_create_place(locality, county_name=None):
 
 
 def get_place_by_locality(locality):
-    """Used for the Data sheet, which records only a locality (no county)."""
-    if not locality:
+    """The Data sheet records only a locality, with no county."""
+    locality = as_text(locality)
+    if locality is None:
         return None
     if locality in locality_index:
         return locality_index[locality]
@@ -254,149 +385,168 @@ def get_place_by_locality(locality):
 
 
 def get_or_create_category(name):
-    if not name:
-        return None
-    if name not in category_ids:
-        cid = new_id()
-        category_ids[name] = cid
-        cur.execute("INSERT INTO categories(category_id, name) VALUES (?, ?)", (cid, name))
-    return category_ids[name]
+    return _get_or_create(category_ids, "categories", "category_id", "name", name)
 
 
-def get_or_create_subcategory(category_id, name):
-    if category_id is None or not name:
+def _child(cache, table, id_col, parent_col, parent_id, name):
+    name = as_text(name)
+    if parent_id is None or name is None:
         return None
-    key = (category_id, name)
-    if key not in subcategory_ids:
-        sid = new_id()
-        subcategory_ids[key] = sid
+    key = (parent_id, name)
+    if key not in cache:
+        uid = new_id()
+        cache[key] = uid
         cur.execute(
-            "INSERT INTO subcategories(subcategory_id, category_id, name) VALUES (?, ?, ?)",
-            (sid, category_id, name),
+            f"INSERT INTO {table}({id_col}, {parent_col}, name) VALUES (?, ?, ?)",
+            (uid, parent_id, name),
         )
-    return subcategory_ids[key]
-
-
-def get_or_create_specific(subcategory_id, name):
-    if subcategory_id is None or not name:
-        return None
-    key = (subcategory_id, name)
-    if key not in specific_ids:
-        spid = new_id()
-        specific_ids[key] = spid
-        cur.execute(
-            "INSERT INTO specifics(specific_id, subcategory_id, name) VALUES (?, ?, ?)",
-            (spid, subcategory_id, name),
-        )
-    return specific_ids[key]
+    return cache[key]
 
 
 def get_or_create_specific_chain(cat, subcat, spec):
     """Walks category -> subcategory -> specific, creating any missing level."""
     category_id = get_or_create_category(cat)
-    subcategory_id = get_or_create_subcategory(category_id, subcat)
-    return get_or_create_specific(subcategory_id, spec)
+    subcategory_id = _child(
+        subcategory_ids, "subcategories", "subcategory_id", "category_id",
+        category_id, subcat,
+    )
+    return _child(
+        specific_ids, "specifics", "specific_id", "subcategory_id",
+        subcategory_id, spec,
+    )
 
 
-def get_or_create_source(citation):
-    if not citation:
+def get_or_create_measure(name, metric_value=None, sheet_row=None, used_by=None):
+    """First definition wins, mirroring MATCH(..., 0). A name used elsewhere
+    but never defined in Measures is still inserted, with a NULL metric_value,
+    so the record keeps saying what it says -- and so it resolves to zero,
+    exactly as the sheet's IFERROR(..., 0) does."""
+    name = norm_key(name)
+    if name is None:
         return None
-    if citation not in source_ids:
-        sid = new_id()
-        source_ids[citation] = sid
-        cur.execute("INSERT INTO sources(source_id, citation) VALUES (?, ?)", (sid, citation))
-    return source_ids[citation]
-
-
-# ------------------------------------------------------------- Places -------
-ws = wb["Places"]
-override_cols = [(c, ws.cell(row=1, column=c).value) for c in range(4, ws.max_column + 1)]
-override_cols = [(c, h) for c, h in override_cols if h]
-
-for r in range(2, 712):
-    county_name = ws.cell(row=r, column=1).value
-    locality = ws.cell(row=r, column=2).value
-    if not locality:
-        continue
-    pid = get_or_create_place(locality, county_name)
-    for c, header in override_cols:
-        val = ws.cell(row=r, column=c).value
-        if val is None or (isinstance(val, str) and "N/A" in val):
-            continue
-        uid = get_or_create_unit(header)
+    if name not in measure_ids:
+        uid = new_id()
+        measure_ids[name] = uid
         cur.execute(
-            "INSERT INTO place_unit_overrides(override_id, place_id, unit_id, definition) VALUES (?, ?, ?, ?)",
-            (new_id(), pid, uid, str(val)),
+            "INSERT INTO measures(measure_id, name, metric_value, sheet_row) "
+            "VALUES (?, ?, ?, ?)",
+            (uid, name, as_num(metric_value), sheet_row),
         )
+        if used_by:
+            invented_measures[name] = used_by
+    return measure_ids[name]
 
-# ---------------------------------------------------------- Categories ------
-ws = wb["Categories"]
-for r in range(2, 593):
-    cat = ws.cell(row=r, column=1).value
-    subcat = ws.cell(row=r, column=2).value
-    spec = ws.cell(row=r, column=3).value
-    if not cat:
-        continue
-    get_or_create_specific_chain(cat, subcat, spec)
+
+def get_or_create_standard(name, metric_value=None, sheet_row=None, used_by=None):
+    name = norm_key(name)
+    if name is None:
+        return None
+    if name not in standard_ids:
+        uid = new_id()
+        standard_ids[name] = uid
+        cur.execute(
+            "INSERT INTO standards(standard_id, name, metric_value, sheet_row) "
+            "VALUES (?, ?, ?, ?)",
+            (uid, name, as_num(metric_value), sheet_row),
+        )
+        if used_by:
+            invented_standards[name] = used_by
+    return standard_ids[name]
+
 
 # ------------------------------------------------------------- Measures -----
-ws = wb["Measures"]
-headers = {c: ws.cell(row=1, column=c).value for c in range(3, ws.max_column + 1)}
-for r in range(2, 493):
-    name = ws.cell(row=r, column=2).value
+# Column B is the name, column C the load-bearing "Metric Value"; D onwards
+# are alternative expressions that no formula reads.
+measures_header = next(iter(rows_of("Measures", 1, 1)))[1]
+measure_targets = [
+    (c, as_text(at(measures_header, c)))
+    for c in range(4, len(measures_header) + 1)
+]
+measure_targets = [(c, h) for c, h in measure_targets if h]
+
+for r, values in rows_of("Measures", 2, MEASURES_LAST_ROW):
+    name = norm_key(at(values, 2))
     if not name:
         continue
-    uid = get_or_create_unit(name)
-    for c, header in headers.items():
-        if not header:
-            continue
-        val = ws.cell(row=r, column=c).value
-        if val is None or not isinstance(val, (int, float)):
+    if name in measure_ids:
+        dropped_duplicates.append(("Measures", name, r))
+        continue
+    mid = get_or_create_measure(name, at(values, 3), sheet_row=r)
+    for c, header in measure_targets:
+        v = as_num(at(values, c))
+        if v is None:
             continue
         cur.execute(
-            "INSERT INTO unit_conversions(conversion_id, unit_id, target_unit, target_col_ix, rate) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (new_id(), uid, header, c, val),
+            "INSERT INTO measure_conversions(conversion_id, measure_id, target_name, value) "
+            "VALUES (?, ?, ?, ?)",
+            (new_id(), mid, header, v),
         )
 
 # ------------------------------------------------------------ Standards -----
-ws = wb["Standards"]
-headers = {c: ws.cell(row=1, column=c).value for c in range(2, ws.max_column + 1)}
-for r in range(2, 100):
-    name = ws.cell(row=r, column=1).value
+# Column A is the name, column B the load-bearing "Metric"; C onwards are
+# alternative expressions.
+standards_header = next(iter(rows_of("Standards", 1, 1)))[1]
+standard_targets = [
+    (c, as_text(at(standards_header, c)))
+    for c in range(3, len(standards_header) + 1)
+]
+standard_targets = [(c, h) for c, h in standard_targets if h]
+
+for r, values in rows_of("Standards", 2, STANDARDS_LAST_ROW):
+    name = norm_key(at(values, 1))
     if not name:
         continue
-    uid = get_or_create_unit(name)
-    for c, header in headers.items():
-        if not header:
-            continue
-        val = ws.cell(row=r, column=c).value
-        if val is None or not isinstance(val, (int, float)):
+    if name in standard_ids:
+        dropped_duplicates.append(("Standards", name, r))
+        continue
+    sid = get_or_create_standard(name, at(values, 2), sheet_row=r)
+    for c, header in standard_targets:
+        v = as_num(at(values, c))
+        if v is None:
             continue
         cur.execute(
-            "INSERT INTO unit_standards(standard_id, unit_id, standard_name, target_col_ix, value) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (new_id(), uid, header, c, val),
+            "INSERT INTO standard_conversions(conversion_id, standard_id, target_name, value) "
+            "VALUES (?, ?, ?, ?)",
+            (new_id(), sid, header, v),
         )
+
+# ------------------------------------------------------------- Places -------
+places_header = next(iter(rows_of("Places", 1, 1)))[1]
+override_cols = [
+    (c, as_text(at(places_header, c))) for c in range(4, len(places_header) + 1)
+]
+override_cols = [(c, h) for c, h in override_cols if h]
+
+for r, values in rows_of("Places", 2, PLACES_LAST_ROW):
+    locality = at(values, 2)
+    if not as_text(locality):
+        continue
+    pid = get_or_create_place(locality, at(values, 1))
+    for c, header in override_cols:
+        val = at(values, c)
+        if val is None or (isinstance(val, str) and "N/A" in val):
+            continue
+        mid = get_or_create_measure(header, used_by="Places")
+        cur.execute(
+            "INSERT INTO place_measure_overrides(override_id, place_id, measure_id, definition) "
+            "VALUES (?, ?, ?, ?)",
+            (new_id(), pid, mid, str(val)),
+        )
+
+# ---------------------------------------------------------- Categories ------
+for _r, values in rows_of("Categories", 2, CATEGORIES_LAST_ROW):
+    if not as_text(at(values, 1)):
+        continue
+    get_or_create_specific_chain(at(values, 1), at(values, 2), at(values, 3))
 
 conn.commit()
 
 # ---------------------------------------------------------- price_entries ---
-ws = wb["Data"]
-DATA_FIRST_ROW = 3
-DATA_LAST_ROW = 10381
-total_rows = DATA_LAST_ROW - DATA_FIRST_ROW + 1
-if SAMPLE_SIZE is None:
-    sample_rows = list(range(DATA_FIRST_ROW, DATA_LAST_ROW + 1))
-else:
-    step = max(1, total_rows // SAMPLE_SIZE)
-    sample_rows = list(range(DATA_FIRST_ROW, DATA_LAST_ROW + 1, step))[:SAMPLE_SIZE]
-
-col = {
+COL = {
     "Entry": 1, "Year": 2, "Region": 3, "Month": 4, "Day": 5,
     "Category": 6, "Subcategory": 7, "Specifics": 8,
     "UNIT 1": 9, "UNIT 2": 10, "UNIT 3": 11, "Multiplier/Workers": 12,
-    "Pounds": 13, "Shillings": 14, "Pence": 15, "Status/Info": 16,
+    "Pounds": 13, "Shillings": 14, "Pence": 15, "Status/Info": 16, "Food": 17,
     "MEASURE 1": 18, "MEASURE 2": 19, "MEASURE 3": 20,
     "Multiplier/Workers Measure": 21, "Total Grams": 22,
     "Valuation Measure": 23, "OUTPUT X": 24, "CHOSEN OUTPUT Y": 25,
@@ -405,91 +555,177 @@ col = {
     "Country": 32, "Coin type": 33, "Information": 34, "Source": 35, "Page": 36,
 }
 
+# Derived column -> the name it gets in excel_cached_calculations.
+CACHED = [
+    ("Total Grams", "total_grams"),
+    ("Val Grams", "val_meas_in_grams"),
+    ("Sales Calc", "val_meas_number"),
+    ("Price in Pence", "val_meas_price_per_numb_in_pence"),
+    ("Total Sale in Pence", "total_sale_in_pence"),
+    ("OUTPUT X VALUE", "output_x_value"),
+    ("Pence per Output Y", "pence_per_output_y"),
+]
 
-def v(row, name):
-    return ws.cell(row=row, column=col[name]).value
+entries = []
+cached = []
+blank_rows = []
 
+for r, values in rows_of("Data", DATA_FIRST_ROW, DATA_LAST_ROW):
+    def v(name):
+        return at(values, COL[name])
 
-def vnum(row, name):
-    """Like v(), but returns None for anything that isn't actually a number
-    (some cells hold cached Excel formula-error text like '#N/A' or
-    '#DIV/0!' instead of a value)."""
-    val = v(row, name)
-    return val if isinstance(val, (int, float)) else None
-
-
-inserted = 0
-skipped_errors = 0
-for r in sample_rows:
-    entry_no = vnum(r, "Entry")
+    entry_no = as_num(v("Entry"))
     if entry_no is None:
         continue
 
-    place_id = get_place_by_locality(v(r, "Region"))
-    specific_id = get_or_create_specific_chain(
-        v(r, "Category"), v(r, "Subcategory"), v(r, "Specifics")
-    )
-    source_id = get_or_create_source(v(r, "Source"))
+    # Rows 7801-10379 of the Data sheet are unfilled template rows: the
+    # dropdowns still hold their default ('Heads/Units' in all four unit
+    # columns, 'UK' for country) but nothing was ever recorded against them.
+    # Importing them would inflate every count in the app by a third and make
+    # 'Heads/Units' look like the most-used measure in the database. Skipped,
+    # and reported at the end so the number is never silently assumed.
+    if not any(as_text(v(c)) is not None for c in (
+            "Year", "Region", "Category", "Subcategory", "Specifics",
+            "UNIT 1", "UNIT 2", "UNIT 3", "Multiplier/Workers",
+            "Pounds", "Shillings", "Pence", "Status/Info", "Food",
+            "Information", "Page", "Month", "Day")):
+        stats["blank template rows skipped"] += 1
+        blank_rows.append(int(entry_no))
+        continue
 
-    day_of_month = vnum(r, "Day")
-    day_of_month = int(day_of_month) if day_of_month is not None else None
+    entry_id = new_id()
 
-    for name in (
-        "UNIT 1", "UNIT 2", "UNIT 3", "Multiplier/Workers", "Pounds", "Shillings",
-        "Pence", "Total Grams", "OUTPUT X VALUE", "Val Grams", "Sales Calc",
-        "Price in Pence", "Total Sale in Pence", "Pence per Output Y", "Page",
-    ):
-        raw = v(r, name)
-        if isinstance(raw, str):
-            skipped_errors += 1
+    # A measure the Data sheet names but Measures never defines resolves to
+    # NULL metric_value, which makes it contribute zero -- exactly what the
+    # sheet's IFERROR(..., 0) does.
+    def measure(col):
+        return get_or_create_measure(v(col), used_by="Data")
 
-    year = vnum(r, "Year")
+    def standard(col):
+        return get_or_create_standard(v(col), used_by="Data")
 
-    cur.execute(
-        """INSERT INTO price_entries (
-            entry_id, legacy_entry_no, year, time_period_id, day_of_month, place_id, specific_id,
-            unit_1, unit_2, unit_3, multiplier_workers, pounds, shillings, pence, status_info,
-            measure_1_unit_id, measure_2_unit_id, measure_3_unit_id, multiplier_workers_measure_id,
-            total_grams, valuation_measure_unit_id, output_x_unit_id, chosen_output_y_unit_id,
-            output_x_value, val_grams, sales_calc, price_in_pence, total_sale_in_pence,
-            pence_per_output_y, country_id, coin_type_id, information, source_id, page
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            new_id(), int(entry_no), int(year) if year is not None else None,
-            get_or_create_time_period(v(r, "Month")), day_of_month, place_id, specific_id,
-            vnum(r, "UNIT 1"), vnum(r, "UNIT 2"), vnum(r, "UNIT 3"), vnum(r, "Multiplier/Workers"),
-            vnum(r, "Pounds"), vnum(r, "Shillings"), vnum(r, "Pence"), v(r, "Status/Info"),
-            get_or_create_unit(v(r, "MEASURE 1")), get_or_create_unit(v(r, "MEASURE 2")),
-            get_or_create_unit(v(r, "MEASURE 3")), get_or_create_multiplier_measure(v(r, "Multiplier/Workers Measure")),
-            vnum(r, "Total Grams"), get_or_create_unit(v(r, "Valuation Measure")),
-            get_or_create_unit(v(r, "OUTPUT X")), get_or_create_unit(v(r, "CHOSEN OUTPUT Y")),
-            vnum(r, "OUTPUT X VALUE"), vnum(r, "Val Grams"), vnum(r, "Sales Calc"),
-            vnum(r, "Price in Pence"), vnum(r, "Total Sale in Pence"), vnum(r, "Pence per Output Y"),
-            get_or_create_country(v(r, "Country")), get_or_create_coin_type(v(r, "Coin type")),
-            v(r, "Information"), source_id, vnum(r, "Page"),
-        ),
-    )
-    inserted += 1
+    entries.append((
+        entry_id,
+        int(entry_no),
+        as_int(v("Year")),
+        get_or_create_time_period(v("Month")),
+        as_int(v("Day")),
+        get_place_by_locality(v("Region")),
+        get_or_create_specific_chain(v("Category"), v("Subcategory"), v("Specifics")),
+        as_num(v("UNIT 1")),
+        as_num(v("UNIT 2")),
+        as_num(v("UNIT 3")),
+        measure("MEASURE 1"),
+        measure("MEASURE 2"),
+        measure("MEASURE 3"),
+        as_num(v("Multiplier/Workers")),
+        get_or_create_multiplier_measure(v("Multiplier/Workers Measure")),
+        as_num(v("Pounds")),
+        as_num(v("Shillings")),
+        as_num(v("Pence")),
+        measure("Valuation Measure"),
+        standard("OUTPUT X"),
+        standard("CHOSEN OUTPUT Y"),
+        as_text(v("Status/Info")),
+        as_text(v("Food")),
+        get_or_create_country(v("Country")),
+        get_or_create_coin_type(v("Coin type")),
+        as_text(v("Information")),
+        get_or_create_source(v("Source")),
+        as_int(v("Page")),
+    ))
+
+    numbers, errors = [], []
+    for sheet_col, db_col in CACHED:
+        raw = v(sheet_col)
+        n = as_num(raw)
+        numbers.append(n)
+        if n is None and isinstance(raw, str) and raw.strip():
+            errors.append(f"{db_col}={raw.strip()}")
+            stats[f"cached error: {raw.strip()}"] += 1
+    cached.append((entry_id, *numbers, "; ".join(errors) or None))
+
+cur.executemany(
+    """INSERT INTO price_entries (
+        entry_id, legacy_entry_no, year, time_period_id, day_of_month, place_id,
+        specific_id, unit_1, unit_2, unit_3, measure_1_id, measure_2_id,
+        measure_3_id, multiplier_workers, multiplier_measure_id, pounds,
+        shillings, pence, valuation_measure_id, output_x_standard_id,
+        output_y_standard_id, status_info, food, country_id, coin_type_id,
+        information, source_id, page
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+    entries,
+)
+cur.executemany(
+    """INSERT INTO excel_cached_calculations (
+        entry_id, total_grams, val_meas_in_grams, val_meas_number,
+        val_meas_price_per_numb_in_pence, total_sale_in_pence, output_x_value,
+        pence_per_output_y, errors
+    ) VALUES (?,?,?,?,?,?,?,?,?)""",
+    cached,
+)
 
 conn.commit()
+wb.close()
 
-print(f"counties: {len(county_ids)}")
-print(f"places: {len(place_ids)}")
-print(f"categories: {len(category_ids)}")
-print(f"subcategories: {len(subcategory_ids)}")
-print(f"specifics: {len(specific_ids)}")
-print(f"units: {len(unit_ids)}")
-print(f"sources: {len(source_ids)}")
-print(f"countries: {len(country_ids)}")
-print(f"coin_types: {len(coin_type_ids)}")
-print(f"time_periods: {len(time_period_ids)}")
-print(f"multiplier_measures: {len(multiplier_measure_ids)}")
-print(f"price_entries inserted: {inserted}")
-print(f"numeric cells that held formula-error text (nulled out): {skipped_errors}")
+# ------------------------------------------------------------- report -------
+def count(table):
+    return cur.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
-for t in ["unit_conversions", "unit_standards", "place_unit_overrides"]:
-    n = cur.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-    print(f"{t}: {n}")
+
+print(f"price_entries        {count('price_entries'):>7}")
+if blank_rows:
+    print(f"  (skipped {len(blank_rows)} blank template rows, "
+          f"Entry {min(blank_rows)}-{max(blank_rows)} — dropdown defaults only, "
+          f"no recorded data)")
+for t in ("counties", "places", "categories", "subcategories", "specifics",
+          "measures", "standards", "measure_conversions", "standard_conversions",
+          "place_measure_overrides", "time_periods", "multiplier_measures",
+          "sources", "countries", "coin_types"):
+    print(f"{t:<21}{count(t):>7}")
+
+resolvable_m = cur.execute(
+    "SELECT COUNT(*) FROM measures WHERE metric_value IS NOT NULL").fetchone()[0]
+resolvable_s = cur.execute(
+    "SELECT COUNT(*) FROM standards WHERE metric_value IS NOT NULL").fetchone()[0]
+print()
+print(f"measures with a metric value   {resolvable_m} of {count('measures')}")
+print(f"standards with a metric value  {resolvable_s} of {count('standards')}")
+
+if dropped_duplicates:
+    print()
+    print(f"duplicate lookup names, later rows unreachable by MATCH() "
+          f"({len(dropped_duplicates)}):")
+    for sheet, name, row in dropped_duplicates:
+        print(f"  {sheet}!{row}  {name!r}")
+
+def report_invented(invented, lookup_sheet):
+    from_data = sorted(n for n, src in invented.items() if src == "Data")
+    from_elsewhere = sorted(n for n, src in invented.items() if src != "Data")
+    if from_data:
+        print()
+        print(f"!! used by Data but not defined in {lookup_sheet} "
+              f"({len(from_data)}) -- these resolve to zero in every "
+              f"calculation, in the spreadsheet as well as here:")
+        for name in from_data:
+            print(f"     {name!r}")
+    if from_elsewhere:
+        print()
+        print(f"   named on the Places sheet but not defined in {lookup_sheet} "
+              f"({len(from_elsewhere)}). Places is reference-only, so these "
+              f"affect no calculation:")
+        print(f"     {', '.join(repr(n) for n in from_elsewhere)}")
+
+
+report_invented(invented_measures, "Measures")
+report_invented(invented_standards, "Standards")
+
+if stats:
+    print()
+    print("cached formula errors carried into excel_cached_calculations:")
+    for k, n in stats.most_common():
+        print(f"  {n:>6}  {k}")
 
 conn.close()
+print()
 print("done ->", OUT)
