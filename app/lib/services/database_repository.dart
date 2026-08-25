@@ -291,6 +291,43 @@ class DatabaseRepository {
     );
   }
 
+  /// Creates a blank entry and returns its id.
+  ///
+  /// The new row gets the next legacy entry number so it sorts to the end of
+  /// the table, and inherits the country if the database only knows one —
+  /// there is no sense making an editor pick "UK" every time when it is the
+  /// only option on record.
+  String createEntry() {
+    final id = _uuid.v4();
+    final nextNo = _db
+        .select('SELECT COALESCE(MAX(legacy_entry_no), 0) + 1 AS n '
+            'FROM price_entries')
+        .first['n'] as int;
+
+    final countries = _db.select('SELECT country_id FROM countries LIMIT 2');
+    final soleCountry =
+        countries.length == 1 ? countries.first['country_id'] as String : null;
+
+    _db.execute(
+      'INSERT INTO price_entries(entry_id, legacy_entry_no, country_id) '
+      'VALUES (?, ?, ?)',
+      [id, nextNo, soleCountry],
+    );
+    return id;
+  }
+
+  /// Removes an entry for good.
+  ///
+  /// The spreadsheet's cached figures for the row go too; they are keyed to
+  /// the entry and foreign keys are on, so they would block the delete.
+  void deleteEntry(String entryId) {
+    _db.execute(
+      'DELETE FROM excel_cached_calculations WHERE entry_id = ?',
+      [entryId],
+    );
+    _db.execute('DELETE FROM price_entries WHERE entry_id = ?', [entryId]);
+  }
+
   /// Finds a place by locality name (optionally within a county), creating
   /// one (and its county, if given and new) when it doesn't exist yet.
   String resolveOrCreatePlace(String locality, {String? county}) {

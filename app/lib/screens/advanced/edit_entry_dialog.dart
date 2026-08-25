@@ -10,18 +10,39 @@ Future<PriceEntry?> showEditEntryDialog(
   BuildContext context, {
   required PriceEntry entry,
   required DatabaseRepository repository,
+  bool isNew = false,
+  VoidCallback? onDelete,
 }) {
   return showDialog<PriceEntry>(
     context: context,
-    builder: (_) => EditEntryDialog(entry: entry, repository: repository),
+    barrierDismissible: !isNew,
+    builder: (_) => EditEntryDialog(
+      entry: entry,
+      repository: repository,
+      isNew: isNew,
+      onDelete: onDelete,
+    ),
   );
 }
 
 class EditEntryDialog extends StatefulWidget {
-  const EditEntryDialog(
-      {super.key, required this.entry, required this.repository});
+  const EditEntryDialog({
+    super.key,
+    required this.entry,
+    required this.repository,
+    this.isNew = false,
+    this.onDelete,
+  });
+
   final PriceEntry entry;
   final DatabaseRepository repository;
+
+  /// A blank entry that has just been created. Cancelling discards it, so the
+  /// dialog cannot be dismissed by tapping outside it.
+  final bool isNew;
+
+  /// Called after the editor confirms deletion. Absent means undeletable.
+  final VoidCallback? onDelete;
 
   @override
   State<EditEntryDialog> createState() => _EditEntryDialogState();
@@ -156,7 +177,9 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Edit entry #${_e.legacyEntryNo ?? ''}',
+                      widget.isNew
+                          ? 'New entry #${_e.legacyEntryNo ?? ''}'
+                          : 'Edit entry #${_e.legacyEntryNo ?? ''}',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
@@ -441,15 +464,25 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  if (!widget.isNew && widget.onDelete != null)
+                    TextButton.icon(
+                      onPressed: _confirmDelete,
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      style: TextButton.styleFrom(
+                          foregroundColor: Theme.of(context).colorScheme.error),
+                      label: const Text('Delete entry'),
+                    ),
+                  const Spacer(),
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Cancel'),
+                    child: Text(widget.isNew ? 'Discard' : 'Cancel'),
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
-                      onPressed: _save, child: const Text('Save changes')),
+                    onPressed: _save,
+                    child: Text(widget.isNew ? 'Add entry' : 'Save changes'),
+                  ),
                 ],
               ),
             ),
@@ -457,6 +490,34 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
         ),
       ),
     );
+  }
+
+  Future<void> _confirmDelete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Delete entry #${_e.legacyEntryNo ?? ''}?'),
+        content: const Text(
+          'The entry is removed from the working copy. The source spreadsheet '
+          'is untouched, so rebuilding the database brings it back — but any '
+          'edits made here since would be lost.',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    Navigator.of(context).pop();
+    widget.onDelete!();
   }
 
   Widget _section(String title) => Padding(

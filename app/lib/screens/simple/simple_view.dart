@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/models.dart';
 import '../../services/pricing.dart';
 import '../../state/app_controller.dart';
-import '../advanced/edit_entry_dialog.dart';
+import '../advanced/advanced_view.dart' show openEntryEditor;
 
 class SimpleView extends StatefulWidget {
   const SimpleView({super.key});
@@ -548,12 +548,7 @@ class _EntryTile extends StatelessWidget {
         ].join('  ·  '),
       ),
       trailing: const Icon(Icons.chevron_right, size: 18),
-      onTap: () async {
-        final app = context.read<AppController>();
-        final updated = await showEditEntryDialog(context,
-            entry: entry, repository: app.repository);
-        if (updated != null) app.applyEdit(updated);
-      },
+      onTap: () => openEntryEditor(context, entry),
     );
   }
 }

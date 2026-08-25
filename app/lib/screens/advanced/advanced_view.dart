@@ -28,6 +28,32 @@ extension _DateFilterLabel on _DateFilter {
 /// table can sort and display without recomputing per cell.
 typedef _Priced = (PriceEntry entry, double? perUnit);
 
+/// Opens the editor for [entry], wiring up save and delete.
+///
+/// Kept in one place because every list in the app opens the same dialog and
+/// they must all behave identically — a delete that works in the table but
+/// not in the compact list is exactly the kind of inconsistency nobody
+/// notices until it matters.
+Future<void> openEntryEditor(BuildContext context, PriceEntry entry) async {
+  final app = context.read<AppController>();
+  final messenger = ScaffoldMessenger.of(context);
+  final updated = await showEditEntryDialog(
+    context,
+    entry: entry,
+    repository: app.repository,
+    onDelete: () {
+      app.deleteEntry(entry.entryId);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Deleted entry #${entry.legacyEntryNo ?? ''}'),
+        ),
+      );
+    },
+  );
+  if (updated != null) app.applyEdit(updated);
+}
+
+
 class AdvancedView extends StatefulWidget {
   const AdvancedView({super.key});
 
@@ -536,12 +562,8 @@ class _EntryRow extends StatelessWidget {
     );
   }
 
-  Future<void> _edit(BuildContext context, PriceEntry entry) async {
-    final app = context.read<AppController>();
-    final updated = await showEditEntryDialog(context,
-        entry: entry, repository: app.repository);
-    if (updated != null) app.applyEdit(updated);
-  }
+  Future<void> _edit(BuildContext context, PriceEntry entry) =>
+      openEntryEditor(context, entry);
 }
 
 class _CompactList extends StatelessWidget {
@@ -566,12 +588,7 @@ class _CompactList extends StatelessWidget {
             ),
             isThreeLine: true,
             trailing: const Icon(Icons.chevron_right),
-            onTap: () async {
-              final app = context.read<AppController>();
-              final updated = await showEditEntryDialog(context,
-                  entry: e, repository: app.repository);
-              if (updated != null) app.applyEdit(updated);
-            },
+            onTap: () => openEntryEditor(context, e),
           ),
         );
       },
