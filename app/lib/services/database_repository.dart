@@ -26,15 +26,21 @@ class DatabaseRepository {
     pe.specific_id, cat.name AS category, sub.name AS subcategory, sp.name AS specific,
     pe.unit_1, pe.unit_2, pe.unit_3,
     pe.measure_1_id, m1.name AS measure_1_name, m1.metric_value AS measure_1_metric,
+      m1.dimension AS measure_1_dimension,
     pe.measure_2_id, m2.name AS measure_2_name, m2.metric_value AS measure_2_metric,
+      m2.dimension AS measure_2_dimension,
     pe.measure_3_id, m3.name AS measure_3_name, m3.metric_value AS measure_3_metric,
+      m3.dimension AS measure_3_dimension,
     pe.multiplier_workers,
     pe.multiplier_measure_id, mm.name AS multiplier_measure_name,
     pe.pounds, pe.shillings, pe.pence,
     pe.valuation_measure_id, vm.name AS valuation_measure_name,
       vm.metric_value AS valuation_measure_metric,
+      vm.dimension AS valuation_measure_dimension,
     pe.output_x_standard_id, ox.name AS output_x_name, ox.metric_value AS output_x_metric,
+      ox.dimension AS output_x_dimension,
     pe.output_y_standard_id, oy.name AS output_y_name, oy.metric_value AS output_y_metric,
+      oy.dimension AS output_y_dimension,
     pe.status_info, pe.food,
     pe.country_id, ctry.name AS country_name,
     pe.coin_type_id, coin.name AS coin_type_name,
@@ -78,11 +84,13 @@ class DatabaseRepository {
       return v is String ? v : v.toString();
     }
 
-    /// Rebuilds a lookup item from the three columns the query carries for it.
-    MetricItem? metric(String idCol, String nameCol, String metricCol) {
+    /// Rebuilds a lookup item from the columns the query carries for it.
+    MetricItem? metric(String idCol, String nameCol, String metricCol,
+        String dimensionCol) {
       final id = s(idCol);
       if (id == null) return null;
-      return MetricItem(id, s(nameCol) ?? '(unnamed)', d(metricCol));
+      return MetricItem(id, s(nameCol) ?? '(unnamed)', d(metricCol),
+          dimension: s(dimensionCol));
     }
 
     return PriceEntry(
@@ -102,19 +110,25 @@ class DatabaseRepository {
       unit1: d('unit_1'),
       unit2: d('unit_2'),
       unit3: d('unit_3'),
-      measure1: metric('measure_1_id', 'measure_1_name', 'measure_1_metric'),
-      measure2: metric('measure_2_id', 'measure_2_name', 'measure_2_metric'),
-      measure3: metric('measure_3_id', 'measure_3_name', 'measure_3_metric'),
+      measure1: metric('measure_1_id', 'measure_1_name', 'measure_1_metric',
+          'measure_1_dimension'),
+      measure2: metric('measure_2_id', 'measure_2_name', 'measure_2_metric',
+          'measure_2_dimension'),
+      measure3: metric('measure_3_id', 'measure_3_name', 'measure_3_metric',
+          'measure_3_dimension'),
       multiplierWorkers: d('multiplier_workers'),
       multiplierMeasureId: s('multiplier_measure_id'),
       multiplierMeasureName: s('multiplier_measure_name'),
       pounds: d('pounds'),
       shillings: d('shillings'),
       pence: d('pence'),
-      valuationMeasure: metric(
-          'valuation_measure_id', 'valuation_measure_name', 'valuation_measure_metric'),
-      outputX: metric('output_x_standard_id', 'output_x_name', 'output_x_metric'),
-      outputY: metric('output_y_standard_id', 'output_y_name', 'output_y_metric'),
+      valuationMeasure: metric('valuation_measure_id',
+          'valuation_measure_name', 'valuation_measure_metric',
+          'valuation_measure_dimension'),
+      outputX: metric('output_x_standard_id', 'output_x_name',
+          'output_x_metric', 'output_x_dimension'),
+      outputY: metric('output_y_standard_id', 'output_y_name',
+          'output_y_metric', 'output_y_dimension'),
       statusInfo: s('status_info'),
       food: s('food'),
       countryId: s('country_id'),
@@ -232,11 +246,13 @@ class DatabaseRepository {
       .toList();
 
   List<MetricItem> _metricItems(String table, String idCol) => _db
-      .select('SELECT $idCol, name, metric_value FROM $table ORDER BY name')
+      .select('SELECT $idCol, name, metric_value, dimension FROM $table '
+          'ORDER BY name')
       .map((r) => MetricItem(
             r[idCol] as String,
             r['name'] as String,
             (r['metric_value'] as num?)?.toDouble(),
+            dimension: r['dimension'] as String?,
           ))
       .toList();
 
@@ -429,7 +445,7 @@ class DatabaseRepository {
     if (name == null || name.trim().isEmpty) return null;
     final trimmed = name.trim().replaceAll('"', '');
     final existing = _db.select(
-      'SELECT $idCol, name, metric_value FROM $table WHERE name = ?',
+      'SELECT $idCol, name, metric_value, dimension FROM $table WHERE name = ?',
       [trimmed],
     );
     if (existing.isNotEmpty) {
@@ -438,6 +454,7 @@ class DatabaseRepository {
         r[idCol] as String,
         r['name'] as String,
         (r['metric_value'] as num?)?.toDouble(),
+        dimension: r['dimension'] as String?,
       );
     }
     final id = _uuid.v4();

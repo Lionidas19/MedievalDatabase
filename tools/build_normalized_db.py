@@ -22,11 +22,16 @@ Two things here are easy to get wrong and are called out in the schema below:
     python tools/build_normalized_db.py
 """
 import os
+import sys
 import sqlite3
 import uuid
 from collections import Counter
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import openpyxl
+
+import dimensions
 
 # Paths are relative to the repo root (this script lives in tools/).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -141,7 +146,14 @@ CREATE TABLE measures (
     measure_id   TEXT PRIMARY KEY,
     name         TEXT NOT NULL UNIQUE,
     metric_value REAL,      -- NULL when the sheet has no usable number
-    sheet_row    INTEGER    -- provenance back into Measures
+    sheet_row    INTEGER,   -- provenance back into Measures
+
+    -- What kind of thing this measures: mass, volume, area, length, count, or
+    -- 'per-unit' for the sheet's own normalisers. PROVISIONAL: worked out from
+    -- the researcher's conversion columns (tools/dimensions.py) and not yet
+    -- confirmed by them. dimension_source records how sure we are.
+    dimension        TEXT,
+    dimension_source TEXT   -- read | guessed | none
 );
 
 -- The Standards sheet: an independent vocabulary, NOT an abridged copy of
@@ -152,7 +164,9 @@ CREATE TABLE standards (
     standard_id  TEXT PRIMARY KEY,
     name         TEXT NOT NULL UNIQUE,
     metric_value REAL,
-    sheet_row    INTEGER
+    sheet_row    INTEGER,
+    dimension        TEXT,   -- see measures.dimension; equally provisional
+    dimension_source TEXT
 );
 
 -- The remaining columns of each sheet, in long form. No calculation reads
@@ -510,6 +524,30 @@ for r, values in rows_of("Standards", 2, STANDARDS_LAST_ROW):
             (new_id(), sid, header, v),
         )
 
+# ------------------------------------------------ dimensions (provisional) ---
+# Read once the conversion tables are complete. See tools/dimensions.py for why
+# this can be inferred at all, and tools/build_review_db.py for how it is put
+# to the researcher for confirmation.
+for table, id_col, join_table, join_col in (
+        ("measures", "measure_id", "measure_conversions", "measure_id"),
+        ("standards", "standard_id", "standard_conversions", "standard_id")):
+    rows = cur.execute(
+        f"SELECT {id_col}, name, metric_value FROM {table}").fetchall()
+    for row_id, name, metric_value in rows:
+        targets = {
+            r[0] for r in cur.execute(
+                f"SELECT target_name FROM {join_table} WHERE {join_col} = ?",
+                (row_id,))
+        }
+        dim, _why, source = dimensions.guess(
+            name, metric_value, targets,
+            vocabulary="standard" if table == "standards" else "measure")
+        cur.execute(
+            f"UPDATE {table} SET dimension = ?, dimension_source = ? "
+            f"WHERE {id_col} = ?",
+            (dim, source, row_id))
+        stats[f"dimension {source}"] += 1
+
 # ------------------------------------------------------------- Places -------
 places_header = next(iter(rows_of("Places", 1, 1)))[1]
 override_cols = [
@@ -688,6 +726,20 @@ resolvable_m = cur.execute(
     "SELECT COUNT(*) FROM measures WHERE metric_value IS NOT NULL").fetchone()[0]
 resolvable_s = cur.execute(
     "SELECT COUNT(*) FROM standards WHERE metric_value IS NOT NULL").fetchone()[0]
+print()
+for table in ("measures", "standards"):
+    read = cur.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE dimension_source = 'read'"
+    ).fetchone()[0]
+    guessed = cur.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE dimension_source = 'guessed'"
+    ).fetchone()[0]
+    unknown = cur.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE dimension IS NULL"
+    ).fetchone()[0]
+    print(f"{table} dimensions: {read} read from the sheet, {guessed} guessed "
+          f"from names, {unknown} unknown")
+
 print()
 print(f"measures with a metric value   {resolvable_m} of {count('measures')}")
 print(f"standards with a metric value  {resolvable_s} of {count('standards')}")

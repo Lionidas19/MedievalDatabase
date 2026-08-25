@@ -351,8 +351,12 @@ class _SimpleViewState extends State<SimpleView> {
                           entries: (_isSimple
                                   ? _commonUnits(outputUnits)
                                   : outputUnits)
-                              .map((u) =>
-                                  DropdownMenuEntry(value: u, label: u.name))
+                              .map((u) => DropdownMenuEntry(
+                                    value: u,
+                                    label: u.dimension == null
+                                        ? u.name
+                                        : '${u.name}  (${u.dimension})',
+                                  ))
                               .toList(),
                           onSelected: (v) => setState(() => _outputUnit = v),
                         ),
@@ -523,7 +527,15 @@ class _ResultCard extends StatelessWidget {
     // quarters, kilograms and acres into one meaningless number.
     final priced = <(PriceEntry, double)>[];
     var unpriced = 0;
+    var wrongKind = 0;
     for (final e in matches) {
+      // Counting cattle by the head and then asking their price per kilogram
+      // is arithmetic the source will happily perform and nobody should
+      // believe. Leave those out of the average rather than let them drag it.
+      if (!e.canBePricedPer(query.outputUnit)) {
+        wrongKind++;
+        continue;
+      }
       final v = e.calculate(outputY: query.outputUnit).pencePerOutputY;
       if (v == null || !v.isFinite) {
         unpriced++;
@@ -555,9 +567,14 @@ class _ResultCard extends StatelessWidget {
               Text(
                 matches.isEmpty
                     ? 'No entries match this lookup.'
-                    : 'None of the ${matches.length} matching entries can be '
-                        'priced per $unitName — their quantities or units are '
-                        'missing from the source.',
+                    : wrongKind == matches.length
+                        ? 'None of the ${matches.length} matching entries are '
+                            'measured by anything that converts to $unitName. '
+                            'Try a unit of the kind these goods were actually '
+                            'sold in.'
+                        : 'None of the ${matches.length} matching entries can '
+                            'be priced per $unitName — their quantities or '
+                            'units are missing from the source.',
               )
             else if (query.kind != AverageKind.all)
               _StatTile(
@@ -568,17 +585,30 @@ class _ResultCard extends StatelessWidget {
               )
             else
               Text('${values.length} priced entries found — see the list below.'),
-            if (values.isNotEmpty && _looksDimensionallyMixed(values)) ...[
+            if (values.isNotEmpty && _isWidelySpread(values)) ...[
               const SizedBox(height: 10),
               _note(
                 context,
-                'These entries are not all measured in the same kind of unit — '
-                'the source counts some goods by head or by the dozen and '
-                'others by weight or volume, and only weights convert honestly '
-                'to $unitName. Narrow the item to compare like with like; the '
-                'median is far more trustworthy than the mean here.',
-                Theme.of(context).colorScheme.error,
-                Icons.warning_amber_outlined,
+                'Prices here span a very wide range — the dearest is '
+                '${_spreadFactor(values)} times the middle of the pack. A '
+                'broad category mixes saffron with barley, so the median is '
+                'far more representative than the mean. Narrow the item to '
+                'compare like with like.',
+                Theme.of(context).colorScheme.onSurfaceVariant,
+                Icons.show_chart,
+              ),
+            ],
+            if (wrongKind > 0) ...[
+              const SizedBox(height: 10),
+              _note(
+                context,
+                '$wrongKind of ${matches.length} entries are measured in a '
+                'different kind of unit — counted by the head or the dozen, or '
+                'measured by area — and cannot be expressed per $unitName. '
+                'They are left out rather than converted into a number that '
+                'would look real and mean nothing.',
+                Theme.of(context).colorScheme.onSurfaceVariant,
+                Icons.straighten,
               ),
             ],
             if (values.isNotEmpty && unpriced > 0) ...[
@@ -613,19 +643,26 @@ class _ResultCard extends StatelessWidget {
     );
   }
 
-  /// True when the spread is so wide that the selection almost certainly mixes
-  /// counts, weights and volumes together.
+  /// True when the priced entries span so wide a range that a mean would
+  /// mislead.
   ///
-  /// The source has no dimension label on a measure, so this cannot be checked
-  /// directly — but genuine price variation within one kind of good stays
-  /// within an order of magnitude or two, whereas pricing 100 head of cattle
-  /// "per kilogram" lands three orders out. A hundredfold gap between the
-  /// median and the largest value is a reliable tell.
-  bool _looksDimensionallyMixed(List<double> sorted) {
+  /// This used to be a proxy for mixed-up units. It no longer needs to be —
+  /// entries measured in the wrong kind of unit are excluded outright now — so
+  /// what remains is real: a broad category like Food holds both barley at a
+  /// fraction of a penny per kilogram and spices at thousands.
+  bool _isWidelySpread(List<double> sorted) {
     if (sorted.length < 5) return false;
     final median = sorted[sorted.length ~/ 2];
     if (median <= 0) return false;
     return sorted.last / median > 100;
+  }
+
+  String _spreadFactor(List<double> sorted) {
+    final median = sorted[sorted.length ~/ 2];
+    final factor = sorted.last / median;
+    return factor >= 1000
+        ? '${(factor / 1000).round()},000'
+        : factor.round().toString();
   }
 
   Widget _note(BuildContext context, String text, Color color, IconData icon) =>

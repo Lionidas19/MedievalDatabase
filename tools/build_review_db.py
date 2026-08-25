@@ -15,10 +15,14 @@ Writes review/1270s80sDatabase_review.sqlite.
 """
 import os
 import re
+import sys
 import sqlite3
 import zipfile
 from collections import Counter
 from xml.etree import ElementTree as ET
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import dimensions
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(_REPO_ROOT, "Copy of 1270s80sDatabase.xlsx")
@@ -137,7 +141,9 @@ CREATE TABLE measure_worksheet (
     times_used    INTEGER NOT NULL,
     used_as       TEXT,      -- quantity / valuation / both
     sheet_row     INTEGER,
-    dimension     TEXT,      -- <- YOU: mass | volume | area | length | count
+    guessed_dimension TEXT,  -- our reading of YOUR conversion columns
+    guess_evidence    TEXT,  -- why we read it that way
+    dimension     TEXT,      -- <- YOU, only where the guess is wrong or blank
     is_estimate   TEXT,      -- <- YOU: yes/no  (we guessed from '?' markers)
     your_notes    TEXT
 );
@@ -148,7 +154,9 @@ CREATE TABLE standard_worksheet (
     times_used   INTEGER NOT NULL,
     used_as      TEXT,       -- output X / output Y / both
     sheet_row    INTEGER,
-    dimension    TEXT,       -- <- YOU
+    guessed_dimension TEXT,
+    guess_evidence    TEXT,
+    dimension    TEXT,       -- <- YOU, only where the guess is wrong or blank
     your_notes   TEXT
 );
 
@@ -183,10 +191,13 @@ readme = [
      "Your spreadsheet is the source of truth and has not been modified. This "
      "file is a set of questions, not a set of corrections."),
     (5, "The most important one",
-     "measure_worksheet.dimension. Your Metric Value column mixes grams, "
-     "litres, square metres and plain counts. Without knowing which is which, "
-     "the app cannot tell that 'price per kilogram' is meaningful for grain "
-     "but meaningless for cattle counted by the head."),
+     "The dimension of each unit. Your Metric Value column mixes grams, "
+     "litres, square metres and plain counts, and without knowing which is "
+     "which the app cannot tell that 'price per kilogram' is meaningful for "
+     "grain but meaningless for cattle counted by the head. We have already "
+     "guessed most of them from your own conversion columns — see "
+     "dimension_guesses_to_confirm, and correct only what is wrong. "
+     "measures_we_could_not_classify lists the ones we could not read."),
 ]
 out.executemany("INSERT INTO read_me VALUES (?,?,?)", readme)
 
@@ -429,21 +440,56 @@ out.executemany(
     "current_value) VALUES (?,?,?,?,?,?,?)", issues)
 
 
+
+
+# ------------------------------------------------------- dimension guess ----
+# The classifier lives in tools/dimensions.py so the ETL and this file cannot
+# drift apart on what a unit measures.
+def guess_dimension(name, metric_value, targets, vocabulary="measure"):
+    dim, why, _source = dimensions.guess(name, metric_value, targets,
+                                         vocabulary=vocabulary)
+    return dim, why
+
+
+def targets_for(join_table, join_col, row_id):
+    return {r[0] for r in db.execute(
+        "SELECT target_name FROM " + join_table + " WHERE " + join_col + " = ?",
+        (row_id,))}
+
+
 # ------------------------------------------------------------ worksheets ----
+measure_id_by_name = {r["name"]: r["measure_id"]
+                      for r in db.execute("SELECT measure_id, name FROM measures")}
+standard_id_by_name = {r["name"]: r["standard_id"]
+                       for r in db.execute("SELECT standard_id, name FROM standards")}
+
 for name, used in sorted(measure_usage.items()):
     m = measures[name]
+    dim, why = guess_dimension(
+        name, m["metric_value"],
+        targets_for("measure_conversions", "measure_id",
+                    measure_id_by_name[name]))
     out.execute(
         "INSERT INTO measure_worksheet(name, metric_value, times_used, "
-        "used_as, sheet_row, is_estimate) VALUES (?,?,?,?,?,?)",
+        "used_as, sheet_row, guessed_dimension, guess_evidence, is_estimate) "
+        "VALUES (?,?,?,?,?,?,?,?)",
         (name, m["metric_value"], used, measure_role.get(name),
-         m["sheet_row"], "yes (guessed from '?')" if name in uncertain_names else None))
+         m["sheet_row"], dim, why,
+         "yes (guessed from '?')" if name in uncertain_names else None))
 
 for name, used in sorted(standard_usage.items()):
-    s = standards[name]
+    st = standards[name]
+    dim, why = guess_dimension(
+        name, st["metric_value"],
+        targets_for("standard_conversions", "standard_id",
+                    standard_id_by_name[name]),
+        vocabulary="standard")
     out.execute(
         "INSERT INTO standard_worksheet(name, metric_value, times_used, "
-        "used_as, sheet_row) VALUES (?,?,?,?,?)",
-        (name, s["metric_value"], used, standard_role.get(name), s["sheet_row"]))
+        "used_as, sheet_row, guessed_dimension, guess_evidence) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (name, st["metric_value"], used, standard_role.get(name),
+         st["sheet_row"], dim, why))
 
 periods = db.execute("""
     SELECT tp.name AS n, COUNT(*) c FROM price_entries pe
@@ -615,9 +661,21 @@ FROM issues i JOIN issue_types t ON i.code = t.code
 WHERE t.severity IN ('blocking', 'important')
 ORDER BY CASE t.severity WHEN 'blocking' THEN 1 ELSE 2 END, t.code, i.entry_no;
 
-CREATE VIEW measures_needing_a_dimension AS
-SELECT name, metric_value, times_used, used_as, is_estimate
-FROM measure_worksheet WHERE dimension IS NULL
+CREATE VIEW measures_we_could_not_classify AS
+SELECT name, metric_value, times_used, used_as, guess_evidence, is_estimate
+FROM measure_worksheet
+WHERE dimension IS NULL AND guessed_dimension IS NULL
+ORDER BY times_used DESC;
+
+-- Everything we did guess, most-used first, for a quick confirmation pass.
+CREATE VIEW dimension_guesses_to_confirm AS
+SELECT 'measure' AS kind, name, metric_value, times_used, guessed_dimension,
+       guess_evidence
+FROM measure_worksheet WHERE guessed_dimension IS NOT NULL
+UNION ALL
+SELECT 'standard', name, metric_value, times_used, guessed_dimension,
+       guess_evidence
+FROM standard_worksheet WHERE guessed_dimension IS NOT NULL
 ORDER BY times_used DESC;
 """)
 

@@ -28,13 +28,38 @@ class LookupItem {
 /// defines it. Such a unit contributes zero to a total rather than failing the
 /// entry, exactly as the spreadsheet behaves.
 class MetricItem {
-  const MetricItem(this.id, this.name, this.metricValue);
+  const MetricItem(this.id, this.name, this.metricValue, {this.dimension});
 
   final String id;
   final String name;
   final double? metricValue;
 
+  /// What kind of thing this unit measures: mass, volume, area, length, count,
+  /// or 'per-unit' for the source's own normalisers. Null when unknown.
+  ///
+  /// Provisional — inferred from the researcher's own conversion columns and
+  /// awaiting their confirmation. See tools/dimensions.py.
+  final String? dimension;
+
   bool get isResolved => metricValue != null;
+
+  /// Whether a quantity in this unit can honestly be expressed in [other].
+  ///
+  /// Unknown dimensions count as compatible: refusing to answer wherever we
+  /// happen to be ignorant would hide far more real data than it protects.
+  ///
+  /// 'per-unit' and 'count' interchange freely — both mean "so many
+  /// indivisible things", so a price per head converts to a price per dozen.
+  /// Neither converts to a weight: a day's labour priced per kilogram is as
+  /// meaningless as cattle priced by the kilogram, and the source will compute
+  /// both without complaint. Mirrors tools/dimensions.py.
+  bool comparableWith(MetricItem? other) {
+    final a = dimension, b = other?.dimension;
+    if (a == null || b == null) return true;
+    if (a == b) return true;
+    const countable = {'per-unit', 'count'};
+    return countable.contains(a) && countable.contains(b);
+  }
 
   @override
   String toString() => name;
@@ -168,6 +193,24 @@ class PriceEntry {
   String? sourceId;
   String? sourceCitation;
   int? page;
+
+  /// What kind of thing this entry's quantity is measured in.
+  ///
+  /// Taken from the first slot that names a resolved measure — entries mix
+  /// slots (quarters, then bushels, then pecks) but always within one system.
+  MetricItem? get primaryMeasure {
+    for (final m in [measure1, measure2, measure3, valuationMeasure]) {
+      if (m != null && m.dimension != null) return m;
+    }
+    return measure1 ?? valuationMeasure;
+  }
+
+  /// Whether pricing this entry per [unit] means anything.
+  ///
+  /// Counting cattle by the head and then asking their price per kilogram is
+  /// arithmetic the source will happily perform and nobody should believe.
+  bool canBePricedPer(MetricItem? unit) =>
+      primaryMeasure?.comparableWith(unit) ?? true;
 
   /// Runs the recovered calculation chain for this entry.
   ///

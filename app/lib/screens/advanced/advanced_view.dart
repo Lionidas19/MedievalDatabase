@@ -186,7 +186,14 @@ class _AdvancedViewState extends State<AdvancedView> {
 
     final priced = [
       for (final e in list)
-        (e, e.calculate(outputY: _outputUnit).pencePerOutputY),
+        (
+          e,
+          // A price per kilogram for something sold by the head is a number
+          // the source will produce and nobody should trust. Show nothing.
+          e.canBePricedPer(_outputUnit)
+              ? e.calculate(outputY: _outputUnit).pencePerOutputY
+              : null,
+        ),
     ];
     priced.sort(_compare);
     return priced;
@@ -541,11 +548,21 @@ class _EntryRow extends StatelessWidget {
             Expanded(flex: flexes[4], child: Text(entry.priceLabel)),
             Expanded(
               flex: flexes[5],
-              child: Text(
-                formatPence(perUnit),
-                style: perUnit == null
-                    ? TextStyle(color: scheme.onSurfaceVariant)
-                    : null,
+              child: Tooltip(
+                message: perUnit != null
+                    ? ''
+                    : entry.canBePricedPer(null) &&
+                            entry.primaryMeasure?.dimension != null
+                        ? 'Measured in '
+                            '${entry.primaryMeasure!.dimension}, which does '
+                            'not convert to the chosen unit'
+                        : 'The source has no quantity or unit to price this by',
+                child: Text(
+                  formatPence(perUnit),
+                  style: perUnit == null
+                      ? TextStyle(color: scheme.onSurfaceVariant)
+                      : null,
+                ),
               ),
             ),
             Expanded(flex: flexes[6], child: Text('${entry.page ?? ''}')),
