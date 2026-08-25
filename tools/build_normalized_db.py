@@ -115,6 +115,16 @@ CREATE TABLE places (
     place_id    TEXT PRIMARY KEY,
     county_id   TEXT REFERENCES counties(county_id),
     locality    TEXT NOT NULL,
+
+    -- Empty, and deliberately so. The brief asks for a map to pick places
+    -- from, which needs a position for each of these 789 localities. The
+    -- spreadsheet has none, and medieval spellings like 'Souendon' or
+    -- 'Wyllindone' cannot be looked up reliably — identifying them is
+    -- research, not programming. The columns exist so the answers have
+    -- somewhere to go; see review/, place_worksheet.
+    latitude    REAL,
+    longitude   REAL,
+
     UNIQUE(county_id, locality)
 );
 

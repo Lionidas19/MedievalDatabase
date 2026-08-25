@@ -160,6 +160,19 @@ CREATE TABLE standard_worksheet (
     your_notes   TEXT
 );
 
+-- Where each place is. Empty: the map the brief asks for needs a position for
+-- every locality, and the spreadsheet has none.
+CREATE TABLE place_worksheet (
+    locality    TEXT NOT NULL,
+    county      TEXT,
+    times_used  INTEGER NOT NULL,
+    latitude    REAL,      -- <- YOU
+    longitude   REAL,      -- <- YOU
+    modern_name TEXT,      -- <- YOU, where the medieval spelling differs
+    your_notes  TEXT,
+    PRIMARY KEY (locality, county)
+);
+
 -- The Month column holds months, seasons and feast days together.
 CREATE TABLE time_period_worksheet (
     name         TEXT PRIMARY KEY,
@@ -182,11 +195,12 @@ readme = [
      "what we need from you. issues lists the individual cases with the sheet "
      "and row to look at. Columns named your_* are empty and are for your "
      "answers — type straight into them and send the file back."),
-    (3, "The three worksheets",
-     "measure_worksheet, standard_worksheet and time_period_worksheet are the "
-     "big asks. Each lists real values from your spreadsheet with one or two "
-     "blank columns for you to fill in. These unlock things the app cannot do "
-     "safely without your knowledge."),
+    (3, "The worksheets",
+     "measure_worksheet, standard_worksheet, time_period_worksheet and "
+     "place_worksheet are the big asks. Each lists real values from your "
+     "spreadsheet with a few blank columns for you to fill in. These unlock "
+     "things the app cannot do safely, or at all, without your knowledge — "
+     "place_worksheet is what a map would be built from."),
     (4, "Nothing has been changed",
      "Your spreadsheet is the source of truth and has not been modified. This "
      "file is a set of questions, not a set of corrections."),
@@ -428,6 +442,13 @@ if blank:
                f"price. Rows {blank[0][1]}–{blank[-1][1]} of the Data sheet.",
         current_value=f"{len(blank)} rows")
 
+# --- questions that are not about individual rows ----------------------------
+add("PLACES_HAVE_NO_POSITION", subject="244 localities in use", sheet="Places",
+    detail="see the place_worksheet table; the fifty most-used cover about "
+           "four fifths of the entries")
+add("YEAR_MAY_START_AT_LADY_DAY", subject="the Year column", sheet="Data",
+    detail="affects any lookup whose range crosses a year boundary")
+
 # --- empty columns ----------------------------------------------------------
 for table, label in (("coin_types", "Coin type"),):
     n = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -490,6 +511,16 @@ for name, used in sorted(standard_usage.items()):
         "VALUES (?,?,?,?,?,?,?)",
         (name, st["metric_value"], used, standard_role.get(name),
          st["sheet_row"], dim, why))
+
+for p in db.execute('''
+        SELECT pl.locality AS locality, co.name AS county, COUNT(*) AS c
+        FROM price_entries pe
+        JOIN places pl ON pe.place_id = pl.place_id
+        LEFT JOIN counties co ON pl.county_id = co.county_id
+        GROUP BY pl.place_id ORDER BY c DESC'''):
+    out.execute(
+        "INSERT OR IGNORE INTO place_worksheet(locality, county, times_used) "
+        "VALUES (?,?,?)", (p["locality"], p["county"], p["c"]))
 
 periods = db.execute("""
     SELECT tp.name AS n, COUNT(*) c FROM price_entries pe
@@ -635,6 +666,32 @@ TYPES = [
      "worked. We do the same. Worth knowing because an earlier version of our "
      "import did not, and silently produced 122 duplicate units.",
      "Nothing needed. Listed for completeness."),
+    ("PLACES_HAVE_NO_POSITION", "No map is possible without locating the places",
+     "important",
+     "The brief sketches a map to pick places from. Neither the spreadsheet "
+     "nor the database records where any of the localities are. 244 of them "
+     "actually appear in the price entries, and the fifty most-used cover "
+     "about four fifths of the data.",
+     "We will not invent coordinates. Medieval spellings like 'Souendon' and "
+     "'Wyllindone' cannot be looked up reliably, and a wrong position in a "
+     "research database is worse than none at all.",
+     "Fill in latitude and longitude in place_worksheet, most-used first — the "
+     "top fifty localities cover most of the entries. Where the medieval "
+     "spelling differs from the modern place, the modern_name column helps as "
+     "much as the coordinates do."),
+    ("YEAR_MAY_START_AT_LADY_DAY", "Which day did the year begin on?",
+     "blocking",
+     "Medieval English years commonly began on 25 March rather than "
+     "1 January, so a record written 'January 1275' may be January 1276 by "
+     "modern reckoning.",
+     "This shifts a whole year, and it potentially affects every entry — "
+     "unlike the Julian/Gregorian difference, which is seven days and touches "
+     "only the hundred-odd entries carrying a day of the month. Any date-range "
+     "lookup crossing a year boundary is affected.",
+     "Tell us which convention Thorold Rogers used, and whether the years in "
+     "your Year column are as he printed them or already adjusted. Until then "
+     "the app shows years exactly as recorded and says it has not adjusted "
+     "them."),
     ("COLUMN_UNUSED", "A column is defined but never filled in",
      "informational",
      "The column exists in the sheet and in the database but no entry uses it.",

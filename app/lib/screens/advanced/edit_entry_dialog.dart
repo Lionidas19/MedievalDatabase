@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/models.dart';
+import '../../services/calendar.dart';
 import '../../services/database_repository.dart';
 import '../../services/pricing.dart';
 import '../../widgets/autocomplete_field.dart';
@@ -243,6 +244,10 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         ),
                       ),
                     ]),
+                    _RecordedDate(
+                        year: _e.year,
+                        periodName: _timePeriodText,
+                        day: _e.dayOfMonth),
                     _section('Category'),
                     _row([
                       Expanded(
@@ -533,6 +538,48 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
           children: children,
         ),
       );
+}
+
+/// Shows a full date in both calendars, where the record carries one.
+///
+/// The accounts are Julian, so a modern reader dating them from the page would
+/// be seven days out. Barely one entry in seventy has a day of the month, so
+/// this is usually absent — which is itself worth showing, since a year alone
+/// is all most of these records give.
+class _RecordedDate extends StatelessWidget {
+  const _RecordedDate(
+      {required this.year, required this.periodName, required this.day});
+
+  final int? year;
+  final String? periodName;
+  final int? day;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final julian = parseRecordedDate(year, periodName, day);
+    final text = julian == null
+        ? ladyDayCaveat
+        : '$julian in the Julian calendar the accounts use, which is '
+            '${julianToGregorian(julian)} by modern reckoning.';
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.event_outlined, size: 14, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(text,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant)),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Live view of what the entry currently computes to.

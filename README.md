@@ -56,11 +56,17 @@ to pick and no folder to choose.
 
 ### Saving your edits
 
-Editing works against an in-memory copy of the database. **Download changes**
-writes the edited database to your device as a new timestamped `.sqlite` file;
-**Open file** loads one back in to carry on from where you left off. Nothing is
-ever overwritten in place, and the bundled default is always one menu click
-away.
+Edits are saved automatically into private browser storage, so closing the tab
+does not lose them and the next visit picks up where you left off. That storage
+is private to one browser on one machine and invisible to your file manager,
+so it is a safety net rather than a filing system.
+
+**Download a copy** writes the database to your device as a new timestamped
+`.sqlite` file — the only form you can keep, move or send to somebody else.
+**Open file** loads one back in. Nothing is ever overwritten in place, and the
+bundled default is one menu click away.
+
+Entries can be added and deleted as well as edited.
 
 ## The two views
 
@@ -68,19 +74,44 @@ away.
 sort by any column, and edit any entry. The `d / <unit>` column is computed
 live against whichever output unit is selected in **Price per**.
 
-**Quick lookup** answers a question in a sentence — *in [county], between
+**Quick lookup** answers a question in a sentence — *in [country], between
 [years], [category] was valued at how many pence per [unit]* — and reports the
-median, mean or mode across matching entries.
+median, mean or mode across matching entries. It comes in two shapes, following
+the researcher's own sketches: **Simple** asks the fewest questions it can,
+**Detailed** adds region, locality, time of year and the full category chain.
 
-### A caveat worth knowing
+### How units are handled
 
-The source measures goods in different *kinds* of unit: some by weight, some
-by volume, some by area, and some simply by the head or the dozen. Only weights
-convert honestly into kilograms. Ask for a broad category priced per kilogram
-and you will be averaging cattle counted by head together with grain measured
-by the quarter — which is why Quick lookup defaults to the **median** and warns
-you when a selection looks dimensionally mixed. Narrow the item to compare like
-with like.
+The source measures goods in different *kinds* of unit: some by weight, some by
+volume, some by area, and some simply by the head or the dozen. Only weights
+convert honestly into kilograms.
+
+Each unit therefore carries a dimension, worked out from the researcher's own
+conversion columns. Entries measured in a kind of unit that cannot reach the
+one you asked for are left out of the average and reported, rather than
+converted into a number that would look real and mean nothing. Asking for Food
+per kilogram excludes 85 entries on that basis and drops the mean from 366
+pence to 2.
+
+These dimensions are **provisional** until the researcher confirms them — see
+`review/`.
+
+### Dates
+
+The accounts are Julian, so a full date in them is seven days behind modern
+reckoning; the editor shows both where a date exists, which is for about one
+entry in seventy. Years are shown exactly as recorded. Medieval English years
+often began on 25 March, so an entry dated early in the year may belong to the
+following year by modern reckoning — that has deliberately **not** been
+adjusted for, because which convention the source used is an open question.
+
+## Questions for the researcher
+
+`python tools/build_review_db.py` writes `review/1270s80sDatabase_review.sqlite`
+— one small file listing everything that needs a human decision, openable in
+any SQLite browser. It holds the unit dimensions to confirm, the time periods
+to classify as months or feasts, and the place coordinates a map would need.
+Columns named `your_*` are blank, for answers to be typed straight in.
 
 ## Regenerating the database from the spreadsheet
 
