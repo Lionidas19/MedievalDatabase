@@ -182,6 +182,24 @@ class DatabaseRepository {
         .toList();
   }
 
+  /// Localities, optionally narrowed to one county.
+  ///
+  /// The researcher's sketch calls these Country / Region / Locality; in this
+  /// database that is country / county / place.
+  List<LookupItem> localities({String? countyId}) {
+    final rows = countyId == null
+        ? _db.select(
+            'SELECT place_id, locality FROM places ORDER BY locality')
+        : _db.select(
+            'SELECT place_id, locality FROM places WHERE county_id = ? '
+            'ORDER BY locality',
+            [countyId]);
+    return rows
+        .map((r) =>
+            LookupItem(r['place_id'] as String, r['locality'] as String))
+        .toList();
+  }
+
   List<CategoryOption> get categories => _db
       .select('SELECT category_id, name FROM categories ORDER BY name')
       .map((r) => CategoryOption(r['category_id'] as String, r['name'] as String))
