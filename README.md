@@ -16,7 +16,9 @@ category, quantity or price. Those are skipped on import.
 
 ```
 Copy of 1270s80sDatabase.xlsx    the source spreadsheet — the source of truth
-tools/build_normalized_db.py     rebuilds the sqlite database from it
+tools/build_normalized_db.py     the original import from it, run once
+tools/check_incoming_db.py       reviews an updated database before it is published
+tools/migrate.py                 applies numbered schema changes to a database
 tools/CALCULATIONS.md            how the spreadsheet's formulas work
 tools/dump_formulas.py           recovers those formulas from the workbook
 tools/dimensions.py              works out what kind of thing each unit measures
@@ -196,7 +198,8 @@ then appears at `https://<user>.github.io/MedievalDatabase/`.
 
 The published site is read-only in the sense that matters: visitors get their
 own copy to filter, edit and download, and no edit they make can reach anybody
-else. To publish updated data, rebuild the database and push it.
+else. Publishing updated data means committing a new database and pushing —
+see "Publishing an updated database" below.
 
 ## Questions for the researcher
 
@@ -224,17 +227,54 @@ The factors are not guessed for a reason: converting a medieval penny by
 retail prices, by earnings or by share of GDP gives answers an order of
 magnitude apart, and choosing between them is the researcher's call.
 
-## Regenerating the database from the spreadsheet
+## Publishing an updated database
+
+`app/data/1270s80sDatabase_normalized.sqlite` is the source of truth. The app
+and the database it needs are deployed together, so publishing new records —
+or a new field — is one push.
+
+```bash
+# 1. see what changed in the file you were sent. Git cannot: it is a binary
+#    blob, so `git diff` will only tell you that nine megabytes moved.
+python tools/check_incoming_db.py ~/Downloads/1270s80sDatabase-2026-09-07.sqlite
+
+# 2. if the schema moved while they were working, bring their file up to it
+python tools/migrate.py ~/Downloads/1270s80sDatabase-2026-09-07.sqlite
+
+# 3. publish
+cp ~/Downloads/1270s80sDatabase-2026-09-07.sqlite    app/data/1270s80sDatabase_normalized.sqlite
+cd app && flutter test && cd ..
+git commit -am "data: <what changed>" && git push
+```
+
+The check refuses a file that will not open, one whose references no longer
+resolve, or one where `excel_cached_calculations` has been altered — that
+table is the frozen record of what the spreadsheet computed, and the only
+independent check on the calculation code. Everything else it reports rather
+than judges: correcting a misread price is what the editor is for.
+
+Schema changes belong in `tools/migrate.py` as numbered steps rather than
+being made by hand in a database editor. A hand edit is stuck in one
+particular copy, so the next file that arrives undoes it; a step applies to
+whichever copy arrives, which is what lets the researcher keep working while
+the schema changes.
+
+## The original import from the spreadsheet
 
 ```bash
 pip install openpyxl
 python tools/build_normalized_db.py
 ```
 
-This rebuilds `app/data/1270s80sDatabase_normalized.sqlite` from scratch,
-normalizing the spreadsheet's flat sheets into dimension and junction tables
-with UUID keys. It prints a report of anything in the source that could not be
-resolved.
+This is how the 7,800 entries first got here: it normalizes the spreadsheet's
+flat sheets into dimension and junction tables with UUID keys, and prints a
+report of anything in the source that could not be resolved.
+
+It is **not** a routine command any more. It rebuilds from scratch, and
+anything logged in the app since has no representation in the spreadsheet to
+be rebuilt from — so it refuses to run when the database holds entries the
+workbook cannot account for. `--force` is there for deliberately starting
+over, after moving the current database somewhere safe.
 
 Note that measures and standards are **two separate vocabularies**: MEASURE 1/2/3
 and the valuation measure resolve against the Measures sheet, while output X and

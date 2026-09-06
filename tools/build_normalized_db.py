@@ -50,7 +50,55 @@ DATA_LAST_ROW = 10381
 # This is simply how far down to look for a header once somebody fills it in.
 CURRENCY_LAST_ROW = 200
 
+def refuse_if_it_holds_work(path):
+    """Stops a rebuild from destroying entries the spreadsheet cannot restore.
+
+    This script used to be the way the database came into existence, and
+    running it again was free — everything in the file came from the workbook,
+    so deleting it lost nothing. That stopped being true the moment the
+    researcher began logging new records in the app: those exist only in the
+    database, and no rebuild can bring them back.
+
+    An entry that came from the spreadsheet has a row in
+    excel_cached_calculations, seeded at import and never written by the app.
+    Anything without one was added afterwards, and is unrecoverable.
+    """
+    try:
+        conn = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+        added = conn.execute(
+            "SELECT COUNT(*) FROM price_entries WHERE entry_id NOT IN "
+            "(SELECT entry_id FROM excel_cached_calculations)").fetchone()[0]
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        conn.close()
+    except sqlite3.Error as e:
+        # A file that will not open might be a half-finished write, or might
+        # be an afternoon's work with a broken header. Refuse either way and
+        # let a person look at it.
+        raise SystemExit(
+            "{} will not open ({}).\n"
+            "Move it aside and rerun, or pass --force to discard it.".format(
+                path, e))
+
+    if added or version:
+        raise SystemExit(
+            "{}\nholds {} {} that {} not in the spreadsheet"
+            "{}.\n\n"
+            "Rebuilding deletes them and they cannot be recovered from the "
+            "workbook. This script is now a one-time import: the database is "
+            "the source of truth, and the spreadsheet is where the original "
+            "7,800 came from.\n\n"
+            "If you really mean to start again from the spreadsheet, move the "
+            "file somewhere safe first and pass --force.".format(
+                path, added,
+                "entry" if added == 1 else "entries",
+                "is" if added == 1 else "are",
+                ", and is at schema version {}".format(version)
+                if version else ""))
+
+
 if os.path.exists(OUT):
+    if "--force" not in sys.argv:
+        refuse_if_it_holds_work(OUT)
     os.remove(OUT)
 
 # read_only streams the sheets instead of building a cell object per cell,
