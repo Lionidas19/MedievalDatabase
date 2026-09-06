@@ -1,5 +1,27 @@
 import '../services/pricing.dart';
 
+/// Whether a quantity measured in a unit of dimension [a] can honestly be
+/// expressed in one of dimension [b].
+///
+/// Unknown dimensions count as compatible: refusing to answer wherever we
+/// happen to be ignorant would hide far more real data than it protects.
+///
+/// 'per-unit' and 'count' interchange freely — both mean "so many indivisible
+/// things", so a price per head converts to a price per dozen. Neither
+/// converts to a weight: a day's labour priced per kilogram is as meaningless
+/// as cattle priced by the kilogram, and the source will compute both without
+/// complaint. Mirrors tools/dimensions.py.
+///
+/// Free of [MetricItem] so the Specifics lookup form can ask the same question of
+/// a bare dimension name — it needs to know which units are worth offering
+/// before it has an entry in hand.
+bool dimensionsComparable(String? a, String? b) {
+  if (a == null || b == null) return true;
+  if (a == b) return true;
+  const countable = {'per-unit', 'count'};
+  return countable.contains(a) && countable.contains(b);
+}
+
 /// A generic (id, label) pair used to populate dropdown/autocomplete pickers
 /// that are backed by a lookup table (places, sources, ...).
 class LookupItem {
@@ -53,13 +75,8 @@ class MetricItem {
   /// Neither converts to a weight: a day's labour priced per kilogram is as
   /// meaningless as cattle priced by the kilogram, and the source will compute
   /// both without complaint. Mirrors tools/dimensions.py.
-  bool comparableWith(MetricItem? other) {
-    final a = dimension, b = other?.dimension;
-    if (a == null || b == null) return true;
-    if (a == b) return true;
-    const countable = {'per-unit', 'count'};
-    return countable.contains(a) && countable.contains(b);
-  }
+  bool comparableWith(MetricItem? other) =>
+      dimensionsComparable(dimension, other?.dimension);
 
   @override
   String toString() => name;
@@ -89,6 +106,34 @@ class SpecificOption {
   final String id;
   final String subcategoryId;
   final String name;
+}
+
+/// One path through the category tree, flattened for searching.
+///
+/// The three levels are three separate dropdowns, which works when you already
+/// know that a plough-horse is filed under Stock / Horses. Typing "wheat" and
+/// being shown "Food / Grain / Wheat" works when you do not — and that is the
+/// commoner case for anyone who did not build the taxonomy.
+class TaxonomyPath {
+  const TaxonomyPath({
+    required this.category,
+    this.subcategory,
+    this.specific,
+  });
+
+  final CategoryOption category;
+  final SubcategoryOption? subcategory;
+  final SpecificOption? specific;
+
+  /// 'Food / Grain / Wheat', or as much of it as this path reaches.
+  String get label => [
+        category.name,
+        if (subcategory != null) subcategory!.name,
+        if (specific != null) specific!.name,
+      ].join(' / ');
+
+  /// The deepest level this path names, which is what a reader typed at.
+  String get leaf => specific?.name ?? subcategory?.name ?? category.name;
 }
 
 /// One row of the price_entries fact table.

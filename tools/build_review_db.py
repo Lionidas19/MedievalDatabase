@@ -138,6 +138,10 @@ CREATE TABLE issues (
 CREATE TABLE measure_worksheet (
     name          TEXT PRIMARY KEY,
     metric_value  REAL,
+    -- How often the name is named, NOT how many entries use it: an entry that
+    -- gives the same measure as its quantity and as its valuation measure
+    -- counts twice. Good for ranking what to answer first, wrong for "this
+    -- affects N records".
     times_used    INTEGER NOT NULL,
     used_as       TEXT,      -- quantity / valuation / both
     sheet_row     INTEGER,
@@ -173,6 +177,29 @@ CREATE TABLE place_worksheet (
     PRIMARY KEY (locality, county)
 );
 
+-- Modern money. Empty: the workbook's Currency sheet contains no cells at
+-- all, so the three UKP 2026 figures the brief asks for have nothing to run
+-- on. One row per year the price records actually use.
+CREATE TABLE currency_worksheet (
+    year         INTEGER PRIMARY KEY,
+    times_used   INTEGER NOT NULL,   -- entries recorded in that year
+    pounds_per_penny REAL,   -- <- YOU: one penny of that year, in 2017 pounds
+    basis        TEXT,       -- <- YOU: retail prices / earnings / GDP share...
+    source       TEXT,       -- <- YOU
+    your_notes   TEXT
+);
+
+-- The second half of the same question, and the one that needs redoing every
+-- year. Prefilled with the brief's own 2017 and 2026; the multiplier is yours.
+CREATE TABLE currency_rebasing_worksheet (
+    id          INTEGER PRIMARY KEY,
+    base_year   INTEGER,    -- <- YOU: the year pounds_per_penny is expressed in
+    target_year INTEGER,    -- <- YOU: the year to report prices in
+    multiplier  REAL,       -- <- YOU: base-year pounds -> target-year pounds
+    source      TEXT,       -- <- YOU
+    your_notes  TEXT
+);
+
 -- The Month column holds months, seasons and feast days together.
 CREATE TABLE time_period_worksheet (
     name         TEXT PRIMARY KEY,
@@ -204,7 +231,18 @@ readme = [
     (4, "Nothing has been changed",
      "Your spreadsheet is the source of truth and has not been modified. This "
      "file is a set of questions, not a set of corrections."),
-    (5, "The most important one",
+    (5, "Modern money",
+     "The brief asks for three figures in 2026 pounds — UKP 2026 Total Sale, "
+     "per Val Meas, and per output Y — all keyed off a Currency tab. That tab "
+     "is empty: it contains no cells at all, so there is nothing to convert "
+     "with and the app cannot show any of the three. currency_worksheet has a "
+     "row per year for the value of a penny, and "
+     "currency_rebasing_worksheet has the single inflation figure that "
+     "carries those to the present. We have not guessed any of it — whether "
+     "you convert by retail prices, by earnings or by share of GDP changes "
+     "the answer by an order of magnitude, and that is your call to make, not "
+     "ours."),
+    (6, "The most important one",
      "The dimension of each unit. Your Metric Value column mixes grams, "
      "litres, square metres and plain counts, and without knowing which is "
      "which the app cannot tell that 'price per kilogram' is meaningful for "
@@ -266,14 +304,14 @@ for name, used in measure_usage.items():
     if m["metric_value"] is None:
         code = "MEASURE_UNDEFINED" if m["sheet_row"] is None else "MEASURE_NO_METRIC"
         add(code, subject=name, sheet="Measures", sheet_row=m["sheet_row"],
-            detail=f"used by {used} entries; contributes 0 to every total")
+            detail=f"named {used} times in the quantity and valuation columns; contributes 0 to every total")
 
 for name, used in standard_usage.items():
     s = standards[name]
     if s["metric_value"] is None:
         code = "STANDARD_UNDEFINED" if s["sheet_row"] is None else "STANDARD_NO_METRIC"
         add(code, subject=name, sheet="Standards", sheet_row=s["sheet_row"],
-            detail=f"used by {used} entries; no price per unit can be produced")
+            detail=f"named {used} times in the output columns; no price per unit can be produced")
 
 # --- duplicate lookup keys --------------------------------------------------
 for sheet, key_col, val_col, first, last in (
@@ -311,7 +349,7 @@ for sheet, key_col, first, last in (("Measures", 2, 2, 492),
             add("UNCERTAIN_CONVERSION", subject=k.strip(), sheet=sheet,
                 sheet_row=r,
                 detail=f"contains '?', which reads as an unverified "
-                       f"conversion; used by {usage.get(k.strip(), 0)} entries")
+                       f"conversion; named {usage.get(k.strip(), 0)} times in the quantity and valuation columns")
 
 # --- entries that cannot produce the headline figure ------------------------
 chain = db.execute("""
@@ -449,6 +487,33 @@ add("PLACES_HAVE_NO_POSITION", subject="244 localities in use", sheet="Places",
 add("YEAR_MAY_START_AT_LADY_DAY", subject="the Year column", sheet="Data",
     detail="affects any lookup whose range crosses a year boundary")
 
+# --- modern money -----------------------------------------------------------
+# The years come from the entries rather than a typed-in range, so a year that
+# appears in the records always has a row to answer for it.
+currency_years = db.execute('''
+    SELECT year, COUNT(*) AS c FROM price_entries
+    WHERE year IS NOT NULL GROUP BY year ORDER BY year''').fetchall()
+currency_rebasing = db.execute(
+    "SELECT base_year, target_year, multiplier FROM currency_rebasing "
+    "WHERE id = 1").fetchone()
+
+for y in currency_years:
+    if db.execute("SELECT base_pounds_per_penny FROM currency_factors "
+                  "WHERE year = ?", (y["year"],)).fetchone()[0] is None:
+        add("MODERN_MONEY_NO_FACTORS", subject=str(y["year"]), sheet="Currency",
+            detail=f"{y['c']} price entries are recorded in {y['year']}, and "
+                   f"no conversion factor exists for that year",
+            current_value="empty")
+
+if not currency_rebasing or currency_rebasing["multiplier"] is None:
+    add("MODERN_MONEY_NO_FACTORS", subject="inflation multiplier",
+        sheet="Currency",
+        detail="the figure carrying base-year pounds up to the year prices "
+               "are reported in — the one the brief notes will need updating "
+               "every year",
+        current_value="empty")
+
+
 # --- empty columns ----------------------------------------------------------
 for table, label in (("coin_types", "Coin type"),):
     n = db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
@@ -526,6 +591,17 @@ periods = db.execute("""
     SELECT tp.name AS n, COUNT(*) c FROM price_entries pe
     JOIN time_periods tp ON pe.time_period_id = tp.time_period_id
     GROUP BY tp.name ORDER BY c DESC""").fetchall()
+for y in currency_years:
+    out.execute(
+        "INSERT INTO currency_worksheet(year, times_used) VALUES (?,?)",
+        (y["year"], y["c"]))
+
+out.execute(
+    "INSERT INTO currency_rebasing_worksheet(id, base_year, target_year) "
+    "VALUES (1,?,?)",
+    (currency_rebasing["base_year"] if currency_rebasing else 2017,
+     currency_rebasing["target_year"] if currency_rebasing else 2026))
+
 for p in periods:
     low = p["n"].strip().lower()
     guess = ("month" if low in MONTHS else
@@ -692,6 +768,28 @@ TYPES = [
      "your Year column are as he printed them or already adjusted. Until then "
      "the app shows years exactly as recorded and says it has not adjusted "
      "them."),
+    ("MODERN_MONEY_NO_FACTORS",
+     "The Currency tab is empty, so no price can be shown in modern money",
+     "important",
+     "The brief asks for three figures in 2026 pounds — UKP 2026 Total Sale, "
+     "UKP 2026 per Val Meas and UKP 2026 per output Y — each computed from "
+     "the entry's year, a figure in pence, and the Currency tab. That tab "
+     "contains no cells at all, and the Data sheet carries no UKP columns "
+     "either. There is nothing to convert with.",
+     "None of the three can be produced. The app shows prices only in the "
+     "pence and shillings the records use, which is exact but leaves a lay "
+     "reader — the audience the brief puts first — without the comparison "
+     "they came for.",
+     "Two things, in currency_worksheet and currency_rebasing_worksheet. "
+     "First, for each year, what one penny of that year was worth in the "
+     "pounds of a single base year, and which index you converted by. Second, "
+     "the one multiplier carrying that base year to the year you want prices "
+     "reported in. The database and the importer are already built for it: "
+     "fill in the worksheets, or lay the Currency sheet out as "
+     "'Year | Pounds per penny | Basis | Source | Note' with 'Base year', "
+     "'Target year' and 'Inflation multiplier' labelled anywhere on it, and "
+     "the figures appear. We have deliberately not guessed: retail prices, "
+     "earnings and share of GDP give answers an order of magnitude apart."),
     ("COLUMN_UNUSED", "A column is defined but never filled in",
      "informational",
      "The column exists in the sheet and in the database but no entry uses it.",
@@ -747,6 +845,7 @@ print()
 print(f"measure_worksheet     {out.execute('SELECT COUNT(*) FROM measure_worksheet').fetchone()[0]:>5} units to label")
 print(f"standard_worksheet    {out.execute('SELECT COUNT(*) FROM standard_worksheet').fetchone()[0]:>5} units to label")
 print(f"time_period_worksheet {out.execute('SELECT COUNT(*) FROM time_period_worksheet').fetchone()[0]:>5} periods to label")
+print(f"currency_worksheet    {out.execute('SELECT COUNT(*) FROM currency_worksheet').fetchone()[0]:>5} years to value")
 print(f"issues                {out.execute('SELECT COUNT(*) FROM issues').fetchone()[0]:>5} rows")
 print(f"size                  {os.path.getsize(OUT)/1024:>5.0f} KB")
 out.close()

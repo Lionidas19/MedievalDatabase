@@ -202,9 +202,22 @@ above, worth reading before reworking the query UI.
 
 - **UKP 2026 conversions** (three columns keyed off a `Currency` tab). No such
   columns exist in the Data sheet, and the `Currency` sheet contains **zero
-  non-empty cells** — it is an empty XML skeleton. This is a planned feature
-  with no data behind it yet; the inflation/conversion factors still have to
-  be sourced before it can be built.
+  non-empty cells** — its dimension is `A1:A1`. This is intent, not data.
+
+  The *mechanism* is now built and the numbers are not. `tools/currency.py`
+  reads the sheet into `currency_factors` (one penny of year Y, in the pounds
+  of a base year) and a single-row `currency_rebasing` (base year → reporting
+  year). The ETL seeds a row per year the entries actually use, with a NULL
+  factor, so the answers have somewhere to go — the same arrangement as
+  `places.latitude`. `review/` asks for them as `currency_worksheet` and
+  `currency_rebasing_worksheet`.
+
+  The factors are deliberately **not** guessed. Converting a thirteenth-century
+  penny to modern money by retail prices, by average earnings or by share of
+  GDP gives answers an order of magnitude apart; which one is right is a
+  scholarly judgement and the researcher's to make. Until a factor arrives the
+  three figures have no answer, which is the same blank the rest of the chain
+  produces wherever the source cannot say.
 - **Julian/Gregorian handling.** The brief wants a calendar toggle; the `Dates`
   sheet was abandoned because Google Sheets clamps pre-1899 dates.
 - **Month column overloading.** It holds months, seasons and feast days

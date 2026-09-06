@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import openpyxl
 
+import currency
 import dimensions
 
 # Paths are relative to the repo root (this script lives in tools/).
@@ -45,6 +46,9 @@ MEASURES_LAST_ROW = 492
 STANDARDS_LAST_ROW = 99
 DATA_FIRST_ROW = 3
 DATA_LAST_ROW = 10381
+# The Currency sheet is empty, so there is no populated last row to record.
+# This is simply how far down to look for a header once somebody fills it in.
+CURRENCY_LAST_ROW = 200
 
 if os.path.exists(OUT):
     os.remove(OUT)
@@ -233,6 +237,55 @@ CREATE TABLE time_periods (
 CREATE TABLE multiplier_measures (
     multiplier_measure_id TEXT PRIMARY KEY,
     name                  TEXT NOT NULL UNIQUE
+);
+
+-- Modern money, from the brief's Currency tab.
+--
+-- The brief asks for three figures -- UKP 2026 Total Sale, UKP 2026 per Val
+-- Meas, UKP 2026 per output Y -- each a function of the entry's year, a figure
+-- in pence, and this reference data. All three are *derived*, so none of them
+-- is stored, for the same reason Pence per Output Y is not: the third one
+-- depends on the output unit the reader picks. What is stored is only what
+-- the source records.
+--
+-- EMPTY, and not by oversight. The workbook's Currency sheet has dimension
+-- A1:A1 and contains no cells at all, and the Data sheet carries no UKP
+-- columns. The brief describes something intended, not something built. One
+-- row per year the price entries actually use is seeded with a NULL factor so
+-- the answers have somewhere to go -- the same reasoning as places.latitude.
+--
+-- Until a factor is filled in, the modern-money figures have no answer. That
+-- is the honest blank the rest of the chain already produces wherever the
+-- source cannot say, and it is emphatically better than an invented number:
+-- converting a thirteenth-century penny to modern money is a scholarly
+-- judgement (retail prices? earnings? share of GDP?) that changes the answer
+-- by an order of magnitude, and it is the researcher's to make.
+CREATE TABLE currency_factors (
+    year                  INTEGER PRIMARY KEY,
+    -- What one penny of `year` was worth, in the pounds of
+    -- currency_rebasing.base_year. NULL until the researcher supplies it.
+    base_pounds_per_penny REAL,
+    basis                 TEXT,   -- which index the figure follows
+    source                TEXT,
+    note                  TEXT
+);
+
+-- The second half of the conversion, kept separate on purpose.
+--
+-- The year factors are a judgement made once; the multiplier that carries the
+-- base year up to the present changes annually -- "will need updating
+-- because... you know... inflation". Folding the two together would mean
+-- re-deriving twenty-two numbers to update one.
+--
+-- One row, enforced. base_year and target_year are the brief's own (2017 and
+-- 2026); the multiplier is not, and stays NULL until supplied.
+CREATE TABLE currency_rebasing (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    base_year   INTEGER,
+    target_year INTEGER,
+    multiplier  REAL,
+    source      TEXT,
+    note        TEXT
 );
 
 -- Recorded facts only. Every column the spreadsheet derived by formula --
@@ -714,6 +767,47 @@ cur.executemany(
 )
 
 conn.commit()
+
+# ------------------------------------------------------------- Currency -----
+# Read after price_entries, because the years to seed come from the entries
+# themselves rather than from a range typed in here.
+currency_sheet = currency.parse(rows_of("Currency", 1, CURRENCY_LAST_ROW))
+
+for f in currency_sheet.factors:
+    cur.execute(
+        "INSERT OR REPLACE INTO currency_factors(year, base_pounds_per_penny, "
+        "basis, source, note) VALUES (?,?,?,?,?)",
+        (f.year, f.pounds_per_penny, f.basis, f.source, f.note),
+    )
+
+# A row per year the records actually use, so every year the app can be asked
+# about has somewhere for its answer to go. INSERT OR IGNORE, so a factor read
+# from the sheet is never overwritten by a blank.
+currency_years = [
+    r[0] for r in cur.execute(
+        "SELECT DISTINCT year FROM price_entries "
+        "WHERE year IS NOT NULL ORDER BY year")
+]
+for year in currency_years:
+    cur.execute("INSERT OR IGNORE INTO currency_factors(year) VALUES (?)",
+                (year,))
+
+rebasing = currency_sheet.rebasing
+cur.execute(
+    "INSERT INTO currency_rebasing(id, base_year, target_year, multiplier, "
+    "source, note) VALUES (1,?,?,?,?,?)",
+    (
+        (rebasing.base_year if rebasing else None) or 2017,
+        (rebasing.target_year if rebasing else None) or 2026,
+        rebasing.multiplier if rebasing else None,
+        rebasing.source if rebasing else None,
+        (rebasing.note if rebasing else None)
+        or "base and target years are the brief's own; the multiplier is not "
+           "supplied anywhere in the workbook",
+    ),
+)
+
+conn.commit()
 wb.close()
 
 # ------------------------------------------------------------- report -------
@@ -729,7 +823,7 @@ if blank_rows:
 for t in ("counties", "places", "categories", "subcategories", "specifics",
           "measures", "standards", "measure_conversions", "standard_conversions",
           "place_measure_overrides", "time_periods", "multiplier_measures",
-          "sources", "countries", "coin_types"):
+          "sources", "countries", "coin_types", "currency_factors"):
     print(f"{t:<21}{count(t):>7}")
 
 resolvable_m = cur.execute(
@@ -753,6 +847,22 @@ for table in ("measures", "standards"):
 print()
 print(f"measures with a metric value   {resolvable_m} of {count('measures')}")
 print(f"standards with a metric value  {resolvable_s} of {count('standards')}")
+
+with_factor = cur.execute(
+    "SELECT COUNT(*) FROM currency_factors "
+    "WHERE base_pounds_per_penny IS NOT NULL").fetchone()[0]
+multiplier = cur.execute(
+    "SELECT multiplier FROM currency_rebasing WHERE id = 1").fetchone()[0]
+print(f"years with a modern-money factor {with_factor} of {count('currency_factors')}"
+      f", inflation multiplier {'set' if multiplier is not None else 'not set'}")
+if currency_sheet.problems:
+    print()
+    print("Currency sheet — the modern-money figures the brief asks for "
+          "(UKP 2026 Total Sale, per Val Meas, per output Y) cannot be "
+          "computed until these are answered:")
+    for problem in currency_sheet.problems:
+        print(f"  {problem}")
+    print("  see review/, currency_worksheet, for the layout to fill in")
 
 if dropped_duplicates:
     print()

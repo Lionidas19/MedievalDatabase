@@ -1,0 +1,86 @@
+# Publishes the Explorer to GitHub Pages.
+#
+# The whole application is static: the database is a bundled asset, sqlite runs
+# in the browser as WebAssembly, and nothing is ever sent anywhere. So there is
+# no server to run and Pages is enough to host all of it.
+#
+# The build output is not committed — `app/.gitignore` covers `build/` — so it
+# is produced here from the spreadsheet-derived database that *is* committed.
+name: Publish to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Lets a build be started by hand from the Actions tab, which is useful for
+  # republishing after changing a Pages setting.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a queued run supersedes a waiting one rather than
+# racing it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned rather than 'latest': a Flutter upgrade should be a change
+          # somebody makes deliberately, not something that arrives with the
+          # next push and breaks the build.
+          flutter-version: 3.41.6
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        working-directory: app
+        run: flutter pub get
+
+      - name: Check it still holds together
+        working-directory: app
+        run: |
+          flutter analyze
+          flutter test
+
+      # --base-href must match the repository name for a project page, or every
+      # asset request goes to the domain root and the app loads to a blank
+      # screen. For a user/organisation page (…github.io itself) it should be
+      # "/" instead.
+      - name: Build
+        working-directory: app
+        # --no-web-resources-cdn keeps CanvasKit in the deployed folder rather
+        # than pointing at gstatic. The app is meant to run with no network at
+        # all, and a hosted copy should be no different.
+        run: >
+          flutter build web --release
+          --no-web-resources-cdn
+          --base-href /${{ github.event.repository.name }}/
+
+      # Without this, Pages runs the output through Jekyll, which skips files
+      # and folders beginning with an underscore.
+      - name: Disable Jekyll
+        run: touch app/build/web/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

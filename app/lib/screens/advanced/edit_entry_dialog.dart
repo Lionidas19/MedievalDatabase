@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
 import '../../services/calendar.dart';
 import '../../services/database_repository.dart';
 import '../../services/pricing.dart';
+import '../../state/view_preferences.dart';
+import '../../theme.dart';
 import '../../widgets/autocomplete_field.dart';
 
 /// Opens the edit dialog and returns the saved entry, or null if cancelled.
@@ -67,9 +70,51 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
 
   DatabaseRepository get _repo => widget.repository;
 
+  // Suggestion lists, gathered once.
+  //
+  // These were rebuilt inside build(), and building the 'specific' list alone
+  // runs a query per category and per subcategory — a hundred round trips to
+  // sqlite every time a keystroke in a number field called setState. The
+  // database cannot change while this dialog is open, so once is enough.
+  late final List<String> _measureNames;
+  late final List<String> _standardNames;
+  late final List<String> _localityNames;
+  late final List<String> _countyNames;
+  late final List<String> _categoryNames;
+  late final List<String> _subcategoryNames;
+  late final List<String> _specificNames;
+  late final List<String> _sourceNames;
+  late final List<String> _countryNames;
+  late final List<String> _coinTypeNames;
+  late final List<String> _timePeriodNames;
+  late final List<String> _multiplierMeasureNames;
+
   @override
   void initState() {
     super.initState();
+    final repo = widget.repository;
+    _measureNames = repo.measures.map((m) => m.name).toList();
+    _standardNames = repo.standards.map((s) => s.name).toList();
+    _localityNames =
+        repo.places().map((p) => p.label.split(',').first).toSet().toList();
+    _countyNames = repo.counties.map((c) => c.label).toList();
+    _categoryNames = repo.categories.map((c) => c.name).toList();
+    _subcategoryNames = <String>{
+      for (final c in repo.categories)
+        for (final s in repo.subcategoriesOf(c.id)) s.name,
+    }.toList();
+    _specificNames = <String>{
+      for (final c in repo.categories)
+        for (final s in repo.subcategoriesOf(c.id))
+          for (final sp in repo.specificsOf(s.id)) sp.name,
+    }.toList();
+    _sourceNames = repo.sources.map((s) => s.label).toList();
+    _countryNames = repo.countries.map((c) => c.label).toList();
+    _coinTypeNames = repo.coinTypes.map((c) => c.label).toList();
+    _timePeriodNames = repo.timePeriods.map((t) => t.label).toList();
+    _multiplierMeasureNames =
+        repo.multiplierMeasures.map((m) => m.label).toList();
+
     _e = widget.entry.copy();
     _localityText = _e.locality ?? '';
     _countyText = _e.county ?? '';
@@ -143,28 +188,11 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final repo = _repo;
-    final measureNames = repo.measures.map((m) => m.name).toList();
-    final standardNames = repo.standards.map((s) => s.name).toList();
-    final localityNames =
-        repo.places().map((p) => p.label.split(',').first).toSet().toList();
-    final countyNames = repo.counties.map((c) => c.label).toList();
-    final categoryNames = repo.categories.map((c) => c.name).toList();
-    final subcategoryNames = <String>{
-      for (final c in repo.categories)
-        for (final s in repo.subcategoriesOf(c.id)) s.name,
-    }.toList();
-    final specificNames = <String>{
-      for (final c in repo.categories)
-        for (final s in repo.subcategoriesOf(c.id))
-          for (final sp in repo.specificsOf(s.id)) sp.name,
-    }.toList();
-    final sourceNames = repo.sources.map((s) => s.label).toList();
-    final countryNames = repo.countries.map((c) => c.label).toList();
-    final coinTypeNames = repo.coinTypes.map((c) => c.label).toList();
-    final timePeriodNames = repo.timePeriods.map((t) => t.label).toList();
-    final multiplierMeasureNames =
-        repo.multiplierMeasures.map((m) => m.label).toList();
+    final prefs = context.watch<ViewPreferences>();
+    final level = prefs.detailLevel;
+    final detailed = level.atLeastDetailed;
+    final everything = level.isEverything;
+    final scheme = Theme.of(context).colorScheme;
 
     return Dialog(
       child: ConstrainedBox(
@@ -173,20 +201,45 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 12, 8),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(
+                  Spacing.xl, Spacing.lg, Spacing.md, Spacing.sm),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(
-                      widget.isNew
-                          ? 'New entry #${_e.legacyEntryNo ?? ''}'
-                          : 'Edit entry #${_e.legacyEntryNo ?? ''}',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.isNew
+                              ? 'New entry #${_e.legacyEntryNo ?? ''}'
+                              : 'Edit entry #${_e.legacyEntryNo ?? ''}',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
+                  // The same setting the table uses, offered here as well.
+                  // Somebody who came to correct one field should not have to
+                  // go back out to the toolbar to be shown that field.
+                  Wrap(
+                    spacing: Spacing.sm,
+                    runSpacing: Spacing.sm,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text('Show',
+                          style: Theme.of(context).textTheme.labelMedium),
+                      for (final l in DetailLevel.values)
+                        ChoiceChip(
+                          label: Text(l.label),
+                          selected: level == l,
+                          showCheckmark: false,
+                          onSelected: (_) => prefs.detailLevel = l,
+                        ),
+                    ],
                   ),
                 ],
               ),
@@ -194,7 +247,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
             const Divider(height: 1),
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(Spacing.xl),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -204,7 +257,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         child: AutocompleteField(
                           label: 'Locality',
                           initialValue: _localityText,
-                          suggestions: localityNames,
+                          suggestions: _localityNames,
                           onChanged: (v) => _localityText = v,
                         ),
                       ),
@@ -212,7 +265,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         child: AutocompleteField(
                           label: 'County',
                           initialValue: _countyText,
-                          suggestions: countyNames,
+                          suggestions: _countyNames,
                           onChanged: (v) => _countyText = v,
                         ),
                       ),
@@ -230,7 +283,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         child: AutocompleteField(
                           label: 'Time period',
                           initialValue: _timePeriodText,
-                          suggestions: timePeriodNames,
+                          suggestions: _timePeriodNames,
                           helperText: 'Month, season or feast',
                           onChanged: (v) => _timePeriodText = v,
                         ),
@@ -245,16 +298,18 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                       ),
                     ]),
                     _RecordedDate(
-                        year: _e.year,
-                        periodName: _timePeriodText,
-                        day: _e.dayOfMonth),
+                      year: _e.year,
+                      periodName: _timePeriodText,
+                      day: _e.dayOfMonth,
+                      showGregorian: prefs.showGregorian,
+                    ),
                     _section('Category'),
                     _row([
                       Expanded(
                         child: AutocompleteField(
                           label: 'Category',
                           initialValue: _categoryText,
-                          suggestions: categoryNames,
+                          suggestions: _categoryNames,
                           onChanged: (v) => _categoryText = v,
                         ),
                       ),
@@ -262,7 +317,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         child: AutocompleteField(
                           label: 'Subcategory',
                           initialValue: _subcategoryText,
-                          suggestions: subcategoryNames,
+                          suggestions: _subcategoryNames,
                           onChanged: (v) => _subcategoryText = v,
                         ),
                       ),
@@ -270,84 +325,88 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         child: AutocompleteField(
                           label: 'Specific',
                           initialValue: _specificText,
-                          suggestions: specificNames,
+                          suggestions: _specificNames,
                           onChanged: (v) => _specificText = v,
                         ),
                       ),
                     ]),
-                    _section('Quantity'),
-                    _row([
-                      Expanded(
-                        child: NumberField(
-                          label: 'Unit 1',
-                          initialValue: _e.unit1,
-                          onChanged: (v) =>
-                              setState(() => _e.unit1 = v?.toDouble()),
+                    if (detailed) ...[
+                      _section('Quantity'),
+                      _row([
+                        Expanded(
+                          child: NumberField(
+                            label: 'Unit 1',
+                            initialValue: _e.unit1,
+                            onChanged: (v) =>
+                                setState(() => _e.unit1 = v?.toDouble()),
+                          ),
                         ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: _measureField('Measure 1', _e.measure1,
-                            measureNames, (m) => _e.measure1 = m),
-                      ),
-                    ]),
-                    _row([
-                      Expanded(
-                        child: NumberField(
-                          label: 'Unit 2',
-                          initialValue: _e.unit2,
-                          onChanged: (v) =>
-                              setState(() => _e.unit2 = v?.toDouble()),
+                        Expanded(
+                          flex: 2,
+                          child: _measureField('Measure 1', _e.measure1,
+                              _measureNames, (m) => _e.measure1 = m),
                         ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: _measureField('Measure 2', _e.measure2,
-                            measureNames, (m) => _e.measure2 = m),
-                      ),
-                    ]),
-                    _row([
-                      Expanded(
-                        child: NumberField(
-                          label: 'Unit 3',
-                          initialValue: _e.unit3,
-                          onChanged: (v) =>
-                              setState(() => _e.unit3 = v?.toDouble()),
+                      ]),
+                      _row([
+                        Expanded(
+                          child: NumberField(
+                            label: 'Unit 2',
+                            initialValue: _e.unit2,
+                            onChanged: (v) =>
+                                setState(() => _e.unit2 = v?.toDouble()),
+                          ),
                         ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: _measureField('Measure 3', _e.measure3,
-                            measureNames, (m) => _e.measure3 = m),
-                      ),
-                    ]),
-                    _row([
-                      Expanded(
-                        child: NumberField(
-                          label: 'Multiplier / workers',
-                          initialValue: _e.multiplierWorkers,
-                          onChanged: (v) => setState(
-                              () => _e.multiplierWorkers = v?.toDouble()),
+                        Expanded(
+                          flex: 2,
+                          child: _measureField('Measure 2', _e.measure2,
+                              _measureNames, (m) => _e.measure2 = m),
                         ),
-                      ),
-                      Expanded(
-                        child: AutocompleteField(
-                          label: 'Multiplier measure',
-                          initialValue: _multiplierMeasureText,
-                          suggestions: multiplierMeasureNames,
-                          onChanged: (v) => _multiplierMeasureText = v,
+                      ]),
+                      _row([
+                        Expanded(
+                          child: NumberField(
+                            label: 'Unit 3',
+                            initialValue: _e.unit3,
+                            onChanged: (v) =>
+                                setState(() => _e.unit3 = v?.toDouble()),
+                          ),
                         ),
-                      ),
-                    ]),
+                        Expanded(
+                          flex: 2,
+                          child: _measureField('Measure 3', _e.measure3,
+                              _measureNames, (m) => _e.measure3 = m),
+                        ),
+                      ]),
+                    ],
+                    if (everything)
+                      _row([
+                        Expanded(
+                          child: NumberField(
+                            label: 'Multiplier / workers',
+                            initialValue: _e.multiplierWorkers,
+                            onChanged: (v) => setState(
+                                () => _e.multiplierWorkers = v?.toDouble()),
+                          ),
+                        ),
+                        Expanded(
+                          child: AutocompleteField(
+                            label: 'Multiplier measure',
+                            initialValue: _multiplierMeasureText,
+                            suggestions: _multiplierMeasureNames,
+                            onChanged: (v) => _multiplierMeasureText = v,
+                          ),
+                        ),
+                      ]),
                     _section('Price as recorded'),
                     Text(
                       'Often a price per valuation measure rather than a total '
                       '— like an hourly wage, not a pay slip.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: Spacing.md),
                     _row([
                       Expanded(
                         child: NumberField(
@@ -374,108 +433,151 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                         ),
                       ),
                     ]),
-                    _row([
-                      Expanded(
-                        child: _measureField(
-                            'Valuation measure',
-                            _e.valuationMeasure,
-                            measureNames,
-                            (m) => _e.valuationMeasure = m),
+                    if (detailed)
+                      _row([
+                        Expanded(
+                          child: _measureField(
+                              'Valuation measure',
+                              _e.valuationMeasure,
+                              _measureNames,
+                              (m) => _e.valuationMeasure = m),
+                        ),
+                      ]),
+                    if (everything) ...[
+                      _section('Output units'),
+                      Text(
+                        'Drawn from the Standards vocabulary, not Measures. '
+                        'Output X is a data correction; output Y is only the '
+                        'default the reader sees first.',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: scheme.onSurfaceVariant),
                       ),
-                    ]),
-                    _section('Output units'),
-                    Text(
-                      'Drawn from the Standards vocabulary, not Measures. '
-                      'Output X is a data correction; output Y is only the '
-                      'default the reader sees first.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      const SizedBox(height: Spacing.md),
+                      _row([
+                        Expanded(
+                          child: _standardField('Output X', _e.outputX,
+                              _standardNames, (s) => _e.outputX = s),
+                        ),
+                        Expanded(
+                          child: _standardField('Output Y (default)',
+                              _e.outputY, _standardNames, (s) => _e.outputY = s),
+                        ),
+                      ]),
+                    ],
+                    const SizedBox(height: Spacing.lg),
+                    _CalculationPreview(entry: _e, level: level),
+                    if (detailed) ...[
+                      _section('Notes & source'),
+                      TextFormField(
+                        initialValue: _e.statusInfo,
+                        decoration:
+                            const InputDecoration(labelText: 'Status / info'),
+                        onChanged: (v) => _e.statusInfo = v,
+                      ),
+                      const SizedBox(height: Spacing.md),
+                      AutocompleteField(
+                        label: 'Source citation',
+                        initialValue: _sourceText,
+                        suggestions: _sourceNames,
+                        onChanged: (v) => _sourceText = v,
+                      ),
+                      const SizedBox(height: Spacing.md),
+                      _row([
+                        Expanded(
+                          child: NumberField(
+                            label: 'Page',
+                            initialValue: _e.page,
+                            integer: true,
+                            onChanged: (v) => _e.page = v?.toInt(),
                           ),
-                    ),
-                    const SizedBox(height: 12),
-                    _row([
-                      Expanded(
-                        child: _standardField('Output X', _e.outputX,
-                            standardNames, (s) => _e.outputX = s),
-                      ),
-                      Expanded(
-                        child: _standardField('Output Y (default)', _e.outputY,
-                            standardNames, (s) => _e.outputY = s),
-                      ),
-                    ]),
-                    const SizedBox(height: 20),
-                    _CalculationPreview(entry: _e),
-                    _section('Notes & source'),
-                    TextFormField(
-                      initialValue: _e.statusInfo,
-                      decoration: const InputDecoration(labelText: 'Status / info'),
-                      onChanged: (v) => _e.statusInfo = v,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      initialValue: _e.food,
-                      decoration: const InputDecoration(
-                        labelText: 'Food',
-                        helperText: 'Payment in kind, where it was not in coin',
-                      ),
-                      onChanged: (v) => _e.food = v,
-                    ),
-                    const SizedBox(height: 12),
-                    AutocompleteField(
-                      label: 'Source citation',
-                      initialValue: _sourceText,
-                      suggestions: sourceNames,
-                      onChanged: (v) => _sourceText = v,
-                    ),
-                    const SizedBox(height: 12),
-                    _row([
-                      Expanded(
-                        child: NumberField(
-                          label: 'Page',
-                          initialValue: _e.page,
-                          integer: true,
-                          onChanged: (v) => _e.page = v?.toInt(),
                         ),
-                      ),
-                      Expanded(
-                        child: AutocompleteField(
-                          label: 'Country',
-                          initialValue: _countryText,
-                          suggestions: countryNames,
-                          onChanged: (v) => _countryText = v,
+                        if (everything) ...[
+                          Expanded(
+                            child: AutocompleteField(
+                              label: 'Country',
+                              initialValue: _countryText,
+                              suggestions: _countryNames,
+                              onChanged: (v) => _countryText = v,
+                            ),
+                          ),
+                          Expanded(
+                            child: AutocompleteField(
+                              label: 'Coin type',
+                              initialValue: _coinTypeText,
+                              suggestions: _coinTypeNames,
+                              onChanged: (v) => _coinTypeText = v,
+                            ),
+                          ),
+                        ],
+                      ]),
+                    ],
+                    if (everything) ...[
+                      const SizedBox(height: Spacing.md),
+                      TextFormField(
+                        initialValue: _e.food,
+                        decoration: const InputDecoration(
+                          labelText: 'Food',
+                          helperText:
+                              'Payment in kind, where it was not in coin',
                         ),
+                        onChanged: (v) => _e.food = v,
                       ),
-                      Expanded(
-                        child: AutocompleteField(
-                          label: 'Coin type',
-                          initialValue: _coinTypeText,
-                          suggestions: coinTypeNames,
-                          onChanged: (v) => _coinTypeText = v,
-                        ),
+                      const SizedBox(height: Spacing.md),
+                      TextFormField(
+                        initialValue: _e.information,
+                        maxLines: 2,
+                        decoration:
+                            const InputDecoration(labelText: 'Information'),
+                        onChanged: (v) => _e.information = v,
                       ),
-                    ]),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      initialValue: _e.information,
-                      maxLines: 2,
-                      decoration: const InputDecoration(labelText: 'Information'),
-                      onChanged: (v) => _e.information = v,
-                    ),
+                    ],
+                    if (!everything) ...[
+                      const SizedBox(height: Spacing.lg),
+                      // A field that is not on screen is indistinguishable from
+                      // a field the record does not have, so say which this is.
+                      // Nothing hidden here is discarded on save.
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.visibility_off_outlined,
+                              size: 15, color: scheme.onSurfaceVariant),
+                          const SizedBox(width: Spacing.sm),
+                          Expanded(
+                            child: Text(
+                              detailed
+                                  ? 'Output units, the worker multiplier, coin '
+                                      'type and free notes are hidden at this '
+                                      'level. They are kept as they are when '
+                                      'you save.'
+                                  : 'Quantities, measures, source and notes are '
+                                      'hidden at this level. They are kept as '
+                                      'they are when you save.',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: scheme.onSurfaceVariant),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
             ),
             const Divider(height: 1),
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(Spacing.lg),
               child: Row(
                 children: [
                   if (!widget.isNew && widget.onDelete != null)
                     TextButton.icon(
                       onPressed: _confirmDelete,
                       icon: const Icon(Icons.delete_outline, size: 18),
-                      style: TextButton.styleFrom(
-                          foregroundColor: Theme.of(context).colorScheme.error),
+                      style:
+                          TextButton.styleFrom(foregroundColor: scheme.error),
                       label: const Text('Delete entry'),
                     ),
                   const Spacer(),
@@ -483,7 +585,7 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
                     onPressed: () => Navigator.of(context).pop(),
                     child: Text(widget.isNew ? 'Discard' : 'Cancel'),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: Spacing.sm),
                   FilledButton(
                     onPressed: _save,
                     child: Text(widget.isNew ? 'Add entry' : 'Save changes'),
@@ -547,12 +649,21 @@ class _EditEntryDialogState extends State<EditEntryDialog> {
 /// this is usually absent — which is itself worth showing, since a year alone
 /// is all most of these records give.
 class _RecordedDate extends StatelessWidget {
-  const _RecordedDate(
-      {required this.year, required this.periodName, required this.day});
+  const _RecordedDate({
+    required this.year,
+    required this.periodName,
+    required this.day,
+    required this.showGregorian,
+  });
 
   final int? year;
   final String? periodName;
   final int? day;
+
+  /// Whether to name the modern equivalent as well. Off, the date is still
+  /// labelled Julian — dropping the label as well would leave a date that
+  /// looks modern and is seven days out.
+  final bool showGregorian;
 
   @override
   Widget build(BuildContext context) {
@@ -560,8 +671,10 @@ class _RecordedDate extends StatelessWidget {
     final julian = parseRecordedDate(year, periodName, day);
     final text = julian == null
         ? ladyDayCaveat
-        : '$julian in the Julian calendar the accounts use, which is '
-            '${julianToGregorian(julian)} by modern reckoning.';
+        : showGregorian
+            ? '$julian in the Julian calendar the accounts use, which is '
+                '${julianToGregorian(julian)} by modern reckoning.'
+            : '$julian in the Julian calendar the accounts use.';
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Row(
@@ -588,8 +701,14 @@ class _RecordedDate extends StatelessWidget {
 /// so an editor can see immediately what a change to a quantity, measure or
 /// price does — and, importantly, when it produces no answer at all.
 class _CalculationPreview extends StatelessWidget {
-  const _CalculationPreview({required this.entry});
+  const _CalculationPreview({required this.entry, required this.level});
   final PriceEntry entry;
+
+  /// How much of the working to show. The headline figure is the answer at
+  /// every level; the intermediate steps are only of interest to somebody
+  /// checking the arithmetic, and to everyone else they are noise around the
+  /// number they came for.
+  final DetailLevel level;
 
   @override
   Widget build(BuildContext context) {
@@ -615,11 +734,16 @@ class _CalculationPreview extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          _line(context, 'Total (metric)', formatPence(c.totalMetric)),
-          _line(context, 'Price as pence', formatPence(c.priceInPence)),
-          _line(context, 'Valuation count', formatPence(c.valuationCount)),
-          _line(context, 'Total sale in pence', formatPence(c.totalSaleInPence)),
-          _line(context, 'Output X value', formatPence(c.outputXValue)),
+          if (level.atLeastDetailed) ...[
+            _line(context, 'Quantity in metric', formatPence(c.totalMetric)),
+            _line(context, 'Price as pence', formatPence(c.priceInPence)),
+            _line(context, 'Total sale in pence',
+                formatPence(c.totalSaleInPence)),
+          ],
+          if (level.isEverything) ...[
+            _line(context, 'Valuation count', formatPence(c.valuationCount)),
+            _line(context, 'Output X value', formatPence(c.outputXValue)),
+          ],
           _line(context, 'Pence per $outputName',
               formatPence(c.pencePerOutputY), emphasise: true),
           if (c.unresolvedMeasures > 0) ...[

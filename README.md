@@ -20,6 +20,7 @@ tools/build_normalized_db.py     rebuilds the sqlite database from it
 tools/CALCULATIONS.md            how the spreadsheet's formulas work
 tools/dump_formulas.py           recovers those formulas from the workbook
 tools/dimensions.py              works out what kind of thing each unit measures
+tools/currency.py                reads the Currency sheet, for prices in modern money
 tools/validate_calculations.py   checks our results against the spreadsheet's
 tools/build_review_db.py         builds the questions file for the researcher
 app/                             the Flutter viewer/editor app
@@ -54,6 +55,19 @@ flutter run -d chrome
 The database is bundled with the app and loads on startup — there is nothing
 to pick and no folder to choose.
 
+### It works with no internet
+
+Nothing is fetched at runtime. Loaded with every Google domain blocked, the
+app makes **no outside requests at all** and reaches all 7,800 entries. The
+rendering engine, both typefaces and the engine's own fallback font ship with
+it, and no data ever leaves the machine — which matters for a tool used on a
+train, behind an institutional proxy, or in an archive with no wifi.
+
+Flutter's defaults are otherwise: it downloads its engine and a fallback
+typeface from Google at startup. `web/flutter_bootstrap.js` redirects both to
+folders shipped alongside the app. Don't delete it, and keep
+`--no-web-resources-cdn` on the build.
+
 ### From VS Code
 
 1. Install the recommended extensions when prompted (Dart + Flutter), or
@@ -75,17 +89,62 @@ bundled default is one menu click away.
 
 Entries can be added and deleted as well as edited.
 
+## How much to show
+
+The brief describes three audiences: somebody who wants a quick average, a
+worldbuilder or academic who wants the specific entries and their sources, and
+a researcher who has come to correct a record. They are not three kinds of
+person so much as three questions, so the app has one setting — **Show:
+Basics / More detail / Everything** — rather than three modes.
+
+| | The table shows | The editor offers |
+|---|---|---|
+| **Basics** | year, place, item, price, price per unit | where, when, what, what it cost |
+| **More detail** | adds entry number, quantity, time of year, page | adds quantities and their measures, the source and page |
+| **Everything** | adds all three measures, valuation measure, output X/Y, the metric total, total sale, the kind of unit, and every note and citation the record carries | every recorded field, plus the working behind each figure |
+
+It applies everywhere at once — the table, the cards on a narrow screen, the
+editor and Quick lookup all follow it. Nothing hidden at a lower level is
+discarded when you save; the editor says so on the screen.
+
+Change it from the **Showing:** button in the toolbar, the chips above the
+table, or the chips in the editor itself.
+
 ## The two views
 
 **Explorer** is the full table: search, filter by county, category and year,
 sort by any column, and edit any entry. The `d / <unit>` column is computed
-live against whichever output unit is selected in **Price per**.
+live against whichever output unit is selected in **Price per**. At the wider
+detail levels the table scrolls sideways rather than squeezing the columns that
+were already there, and the header travels with it.
+
+**Group** gathers the rows under headings — by year, county, category, or the
+kind of unit a good was measured in. Each heading carries the median price per
+the chosen unit *within that group*, and says how many entries that median came
+from: `median 0.186d / Kilograms from 3951 of 4015`. The rest are entries the
+source cannot price, left out rather than counted as zero.
+
+Grouping by the kind of measure is the one worth knowing about. It puts mass,
+volume, area and count in separate blocks, which is what makes it visible *why*
+entries drop out of an average.
 
 **Quick lookup** answers a question in a sentence — *in [country], between
 [years], [category] was valued at how many pence per [unit]* — and reports the
-median, mean or mode across matching entries. It comes in two shapes, following
-the researcher's own sketches: **Simple** asks the fewest questions it can,
-**Detailed** adds region, locality, time of year and the full category chain.
+median, mean or mode across matching entries. It follows the same setting:
+**Basics** asks the fewest questions it can, **More detail** adds region,
+locality, time of year and the full category chain, and **Everything** also
+reports the spread the answer came from.
+
+## Appearance
+
+**Display** in the toolbar holds the detail level, light/dark/system, the row
+height, and three palettes:
+
+- **Parchment** — warm leather and ink, the default.
+- **High contrast** — for projectors, poor screens and tired eyes.
+- **Plain** — neutral greys, for screenshots that have to sit in a paper.
+
+All of it is remembered in this browser between visits.
 
 ### How units are handled
 
@@ -107,18 +166,63 @@ These dimensions are **provisional** until the researcher confirms them — see
 
 The accounts are Julian, so a full date in them is seven days behind modern
 reckoning; the editor shows both where a date exists, which is for about one
-entry in seventy. Years are shown exactly as recorded. Medieval English years
-often began on 25 March, so an entry dated early in the year may belong to the
-following year by modern reckoning — that has deliberately **not** been
-adjusted for, because which convention the source used is an open question.
+entry in seventy. (**Display** can turn the modern equivalent off; the date is
+still labelled Julian either way.) Years are shown exactly as recorded.
+Medieval English years often began on 25 March, so an entry dated early in the
+year may belong to the following year by modern reckoning — that has
+deliberately **not** been adjusted for, because which convention the source
+used is an open question.
+
+## Putting it on the web
+
+The whole application is static — the database is a bundled asset, SQLite runs
+in the browser as WebAssembly, and nothing is ever sent anywhere — so GitHub
+Pages can host all of it. `.github/workflows/pages.yml` builds and publishes on
+every push to `main`.
+
+Three things have to be true, and the workflow handles all three:
+
+1. **`--base-href` must match the repository name.** A project page is served
+   from `/MedievalDatabase/`, and without this every asset is requested from
+   the domain root and the app loads to a blank screen. On a user or
+   organisation page (`you.github.io` itself) it is `/` instead.
+2. **Jekyll has to be turned off**, or Pages skips files beginning with an
+   underscore.
+3. **The build is made in CI, not committed.** `app/build/` is ignored; what
+   is committed is the database the build bundles.
+
+To switch it on, once: **Settings → Pages → Source → GitHub Actions**. The site
+then appears at `https://<user>.github.io/MedievalDatabase/`.
+
+The published site is read-only in the sense that matters: visitors get their
+own copy to filter, edit and download, and no edit they make can reach anybody
+else. To publish updated data, rebuild the database and push it.
 
 ## Questions for the researcher
 
 `python tools/build_review_db.py` writes `review/1270s80sDatabase_review.sqlite`
 — one small file listing everything that needs a human decision, openable in
 any SQLite browser. It holds the unit dimensions to confirm, the time periods
-to classify as months or feasts, and the place coordinates a map would need.
+to classify as months or feasts, the place coordinates a map would need, and
+the conversion factors that would let prices be shown in modern money.
 Columns named `your_*` are blank, for answers to be typed straight in.
+
+### Prices in modern money
+
+The brief asks for three figures in 2026 pounds, all keyed off the workbook's
+Currency tab. **That tab is empty** — it contains no cells at all — so none of
+the three can be computed yet.
+
+The database and the importer are ready for them: fill in `currency_worksheet`
+(what one penny of each year was worth, and by which index) and
+`currency_rebasing_worksheet` (the single figure carrying that to the present)
+in the review file, or lay the Currency sheet out as
+`Year | Pounds per penny | Basis | Source | Note`, with `Base year`,
+`Target year` and `Inflation multiplier` labelled anywhere on it, and rebuild.
+
+The factors are not guessed for a reason: converting a medieval penny by
+retail prices, by earnings or by share of GDP gives answers an order of
+magnitude apart, and choosing between them is the researcher's call.
 
 ## Regenerating the database from the spreadsheet
 
@@ -145,7 +249,8 @@ cd app
 flutter test
 ```
 
-Runs on the Dart VM — no browser, no WASM. Alongside the unit tests,
+Runs on the Dart VM — no browser, no WASM. Alongside the unit tests and the
+table's layout tests,
 `calculation_corpus_test.dart` replays all 7,800 entries through the
 calculator and compares every derived value against what the spreadsheet
 computed for the same entry. 7,799 agree on all six; the one exception is

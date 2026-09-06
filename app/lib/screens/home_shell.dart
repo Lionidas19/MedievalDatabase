@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_controller.dart';
+import '../state/view_preferences.dart';
 import '../theme.dart';
+import 'display_settings.dart';
 import 'onboarding_screen.dart';
 import 'advanced/advanced_view.dart';
 import 'advanced/edit_entry_dialog.dart';
@@ -134,9 +136,20 @@ class _ModeBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mode = context.watch<AppController>().mode;
+    // Both views stay mounted so switching between them keeps filters,
+    // scroll position and a generated result. That has a cost the IndexedStack
+    // cannot avoid on its own: a view listening to settings is rebuilt when
+    // they change whether or not anybody can see it, and Specifics lookup is
+    // expensive to build — its dropdowns hold every locality and output unit
+    // the source knows. So each view is told whether it is the one on screen,
+    // and only that one subscribes.
+    final advanced = mode == ViewMode.advanced;
     return IndexedStack(
-      index: mode == ViewMode.advanced ? 0 : 1,
-      children: const [AdvancedView(), SimpleView()],
+      index: advanced ? 0 : 1,
+      children: [
+        AdvancedView(active: advanced),
+        SimpleView(active: !advanced),
+      ],
     );
   }
 }
@@ -161,7 +174,7 @@ class _SideNav extends StatelessWidget {
         NavigationRailDestination(
           icon: Icon(Icons.eco_outlined),
           selectedIcon: Icon(Icons.eco),
-          label: Text('Quick lookup'),
+          label: Text('Specifics lookup'),
         ),
       ],
     );
@@ -187,7 +200,7 @@ class _BottomNav extends StatelessWidget {
         NavigationDestination(
           icon: Icon(Icons.eco_outlined),
           selectedIcon: Icon(Icons.eco),
-          label: 'Quick lookup',
+          label: 'Specifics lookup',
         ),
       ],
     );
@@ -269,6 +282,40 @@ class _SaveIndicator extends StatelessWidget {
   }
 }
 
+/// Opens the display settings, and says what the current detail level is.
+///
+/// The level is the setting most likely to be wrong for a given reader, and
+/// the one whose effect is easiest to mistake for missing data — a table
+/// showing five columns because it was left on Basics looks exactly like a
+/// database that only holds five things. So it is labelled, not just an icon.
+class _DisplayButton extends StatelessWidget {
+  const _DisplayButton({required this.compact});
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = context.watch<ViewPreferences>();
+    if (compact) {
+      return IconButton(
+        icon: const Icon(Icons.display_settings_outlined),
+        tooltip: 'Display settings',
+        onPressed: () => showDisplaySettings(context),
+      );
+    }
+    return Tooltip(
+      message: 'Detail, theme and row height',
+      child: TextButton.icon(
+        onPressed: () => showDisplaySettings(context),
+        // Not Icons.tune: the Explorer's filter button already wears it,
+        // and two identical icons on one screen read as two of the same
+        // control.
+        icon: const Icon(Icons.display_settings_outlined, size: 18),
+        label: Text('Showing: ${prefs.detailLevel.label.toLowerCase()}'),
+      ),
+    );
+  }
+}
+
 class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   const _TopBar({required this.compact});
   final bool compact;
@@ -309,6 +356,8 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             ),
           ),
         _SaveIndicator(app: app),
+        const SizedBox(width: 4),
+        _DisplayButton(compact: compact),
         const SizedBox(width: 4),
         if (!compact)
           OutlinedButton.icon(

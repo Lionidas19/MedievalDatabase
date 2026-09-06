@@ -19,6 +19,28 @@ class DatabaseRepository {
   final SqliteService _svc;
   CommonDatabase get _db => _svc.db;
 
+  /// Lookup results, held for as long as the database is open.
+  ///
+  /// Every getter below was a query, and the screens call them from `build`:
+  /// switching a setting re-read all 66 counties, 99 standards, 789 localities
+  /// and the whole category tree before a single pixel changed. The lookup
+  /// tables only move when something here writes to them, and [_invalidate]
+  /// covers that.
+  final _memo = <String, Object>{};
+
+  T _cached<T extends Object>(String key, T Function() compute) {
+    final hit = _memo[key];
+    if (hit != null) return hit as T;
+    final value = compute();
+    _memo[key] = value;
+    return value;
+  }
+
+  /// Called by every write. Coarse on purpose: these lists are small and
+  /// rebuilt in microseconds, and a stale dropdown after an edit is a far
+  /// worse bug than a redundant query.
+  void _invalidate() => _memo.clear();
+
   static const _entryColumns = '''
     pe.entry_id, pe.legacy_entry_no, pe.year,
     pe.time_period_id, tp.name AS time_period_name, pe.day_of_month,
@@ -163,21 +185,24 @@ class DatabaseRepository {
     return _rowToEntry(rows.first);
   }
 
-  (int, int) get yearRange {
-    final r = _db
-        .select('SELECT MIN(year) AS lo, MAX(year) AS hi FROM price_entries')
-        .first;
-    return ((r['lo'] as int?) ?? 1270, (r['hi'] as int?) ?? 1500);
-  }
+  (int, int) get yearRange => _cached('yearRange', () {
+        final r = _db
+            .select('SELECT MIN(year) AS lo, MAX(year) AS hi FROM price_entries')
+            .first;
+        return ((r['lo'] as int?) ?? 1270, (r['hi'] as int?) ?? 1500);
+      });
 
   // ----------------------------------------------------------- dimensions --
 
-  List<LookupItem> get counties => _db
+  List<LookupItem> get counties => _cached('counties', () => _db
       .select('SELECT county_id, name FROM counties ORDER BY name')
       .map((r) => LookupItem(r['county_id'] as String, r['name'] as String))
-      .toList();
+      .toList());
 
-  List<LookupItem> places({String? countyId}) {
+  List<LookupItem> places({String? countyId}) =>
+      _cached('places:$countyId', () => _places(countyId));
+
+  List<LookupItem> _places(String? countyId) {
     final where = countyId != null ? 'WHERE pl.county_id = ?' : '';
     final args = countyId != null ? [countyId] : const [];
     final rows = _db.select(
@@ -200,7 +225,10 @@ class DatabaseRepository {
   ///
   /// The researcher's sketch calls these Country / Region / Locality; in this
   /// database that is country / county / place.
-  List<LookupItem> localities({String? countyId}) {
+  List<LookupItem> localities({String? countyId}) =>
+      _cached('localities:$countyId', () => _localities(countyId));
+
+  List<LookupItem> _localities(String? countyId) {
     final rows = countyId == null
         ? _db.select(
             'SELECT place_id, locality FROM places ORDER BY locality')
@@ -214,12 +242,13 @@ class DatabaseRepository {
         .toList();
   }
 
-  List<CategoryOption> get categories => _db
+  List<CategoryOption> get categories => _cached('categories', () => _db
       .select('SELECT category_id, name FROM categories ORDER BY name')
       .map((r) => CategoryOption(r['category_id'] as String, r['name'] as String))
-      .toList();
+      .toList());
 
-  List<SubcategoryOption> subcategoriesOf(String categoryId) => _db
+  List<SubcategoryOption> subcategoriesOf(String categoryId) =>
+      _cached('subcategories:$categoryId', () => _db
       .select(
         'SELECT subcategory_id, category_id, name FROM subcategories '
         'WHERE category_id = ? ORDER BY name',
@@ -230,9 +259,10 @@ class DatabaseRepository {
             r['category_id'] as String,
             r['name'] as String,
           ))
-      .toList();
+      .toList());
 
-  List<SpecificOption> specificsOf(String subcategoryId) => _db
+  List<SpecificOption> specificsOf(String subcategoryId) =>
+      _cached('specifics:$subcategoryId', () => _db
       .select(
         'SELECT specific_id, subcategory_id, name FROM specifics '
         'WHERE subcategory_id = ? ORDER BY name',
@@ -243,9 +273,29 @@ class DatabaseRepository {
             r['subcategory_id'] as String,
             r['name'] as String,
           ))
-      .toList();
+      .toList());
 
-  List<MetricItem> _metricItems(String table, String idCol) => _db
+  /// Every category, subcategory and specific as one searchable list.
+  ///
+  /// 737 paths over the whole tree, built once. Deepest first, so typing a
+  /// word lands on the specific thing it names before the branch above it.
+  List<TaxonomyPath> get taxonomyPaths => _cached('taxonomyPaths', () {
+        final paths = <TaxonomyPath>[];
+        for (final c in categories) {
+          for (final sub in subcategoriesOf(c.id)) {
+            for (final sp in specificsOf(sub.id)) {
+              paths.add(TaxonomyPath(
+                  category: c, subcategory: sub, specific: sp));
+            }
+            paths.add(TaxonomyPath(category: c, subcategory: sub));
+          }
+          paths.add(TaxonomyPath(category: c));
+        }
+        return paths;
+      });
+
+  List<MetricItem> _metricItems(String table, String idCol) =>
+      _cached('metrics:$table', () => _db
       .select('SELECT $idCol, name, metric_value, dimension FROM $table '
           'ORDER BY name')
       .map((r) => MetricItem(
@@ -254,7 +304,7 @@ class DatabaseRepository {
             (r['metric_value'] as num?)?.toDouble(),
             dimension: r['dimension'] as String?,
           ))
-      .toList();
+      .toList());
 
   /// The vocabulary for MEASURE 1/2/3 and the valuation measure.
   List<MetricItem> get measures => _metricItems('measures', 'measure_id');
@@ -266,39 +316,41 @@ class DatabaseRepository {
   /// The standards a reader can meaningfully ask for a price "per". Anything
   /// without a metric value cannot produce an answer, so offering it would
   /// only ever yield a dash.
-  List<MetricItem> get outputUnitChoices =>
-      standards.where((s) => s.isResolved).toList();
+  List<MetricItem> get outputUnitChoices => _cached('outputUnits',
+      () => standards.where((s) => s.isResolved).toList());
 
-  List<LookupItem> get sources => _db
+  List<LookupItem> get sources => _cached('sources', () => _db
       .select('SELECT source_id, citation FROM sources ORDER BY citation')
       .map((r) => LookupItem(r['source_id'] as String, r['citation'] as String))
-      .toList();
+      .toList());
 
-  List<LookupItem> get timePeriods => _db
+  List<LookupItem> get timePeriods => _cached('timePeriods', () => _db
       .select('SELECT time_period_id, name FROM time_periods ORDER BY name')
       .map((r) => LookupItem(r['time_period_id'] as String, r['name'] as String))
-      .toList();
+      .toList());
 
-  List<LookupItem> get multiplierMeasures => _db
+  List<LookupItem> get multiplierMeasures => _cached('multiplierMeasures',
+      () => _db
       .select('SELECT multiplier_measure_id, name FROM multiplier_measures ORDER BY name')
       .map((r) =>
           LookupItem(r['multiplier_measure_id'] as String, r['name'] as String))
-      .toList();
+      .toList());
 
-  List<LookupItem> get countries => _db
+  List<LookupItem> get countries => _cached('countries', () => _db
       .select('SELECT country_id, name FROM countries ORDER BY name')
       .map((r) => LookupItem(r['country_id'] as String, r['name'] as String))
-      .toList();
+      .toList());
 
-  List<LookupItem> get coinTypes => _db
+  List<LookupItem> get coinTypes => _cached('coinTypes', () => _db
       .select('SELECT coin_type_id, name FROM coin_types ORDER BY name')
       .map((r) => LookupItem(r['coin_type_id'] as String, r['name'] as String))
-      .toList();
+      .toList());
 
   // ---------------------------------------------------------------- writes --
 
   /// Persists every editable field of [entry] back to price_entries.
   void saveEntry(PriceEntry entry) {
+    _invalidate();
     _db.execute(
       '''UPDATE price_entries SET
         year = ?, time_period_id = ?, day_of_month = ?, place_id = ?, specific_id = ?,
@@ -332,6 +384,7 @@ class DatabaseRepository {
   /// there is no sense making an editor pick "UK" every time when it is the
   /// only option on record.
   String createEntry() {
+    _invalidate();
     final id = _uuid.v4();
     final nextNo = _db
         .select('SELECT COALESCE(MAX(legacy_entry_no), 0) + 1 AS n '
@@ -355,6 +408,7 @@ class DatabaseRepository {
   /// The spreadsheet's cached figures for the row go too; they are keyed to
   /// the entry and foreign keys are on, so they would block the delete.
   void deleteEntry(String entryId) {
+    _invalidate();
     _db.execute(
       'DELETE FROM excel_cached_calculations WHERE entry_id = ?',
       [entryId],
@@ -365,6 +419,7 @@ class DatabaseRepository {
   /// Finds a place by locality name (optionally within a county), creating
   /// one (and its county, if given and new) when it doesn't exist yet.
   String resolveOrCreatePlace(String locality, {String? county}) {
+    _invalidate();
     final trimmedLocality = locality.trim();
     String? countyId;
     if (county != null && county.trim().isNotEmpty) {
@@ -401,6 +456,7 @@ class DatabaseRepository {
   /// and returns the leaf specific_id.
   String resolveOrCreateSpecificChain(
       String category, String subcategory, String specific) {
+    _invalidate();
     String findOrInsert(String table, String idCol, String name,
         {String? parentCol, String? parentId}) {
       final whereParent = parentCol != null ? ' AND $parentCol = ?' : '';
@@ -443,6 +499,7 @@ class DatabaseRepository {
   MetricItem? _resolveOrCreateMetric(
       String table, String idCol, String? name) {
     if (name == null || name.trim().isEmpty) return null;
+    _invalidate();
     final trimmed = name.trim().replaceAll('"', '');
     final existing = _db.select(
       'SELECT $idCol, name, metric_value, dimension FROM $table WHERE name = ?',
@@ -476,6 +533,7 @@ class DatabaseRepository {
   String? _resolveOrCreate(
       String table, String idCol, String nameCol, String? name) {
     if (name == null || name.trim().isEmpty) return null;
+    _invalidate();
     final trimmed = name.trim();
     final existing =
         _db.select('SELECT $idCol FROM $table WHERE $nameCol = ?', [trimmed]);

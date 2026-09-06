@@ -66,8 +66,18 @@ class AppController extends ChangeNotifier {
   DateTime? _lastSavedAt;
   String? _saveError;
   bool _restoredFromLocal = false;
+  int _revision = 0;
 
   bool get hasData => _repository != null;
+
+  /// Bumped whenever the entry list changes in a way that invalidates anything
+  /// derived from it.
+  ///
+  /// The Explorer filters, prices and sorts 7,800 entries; doing that on every
+  /// rebuild meant redoing it each time the save indicator ticked from
+  /// 'Saving...' to 'Saved'. This is the cheap half of the fix — a number the
+  /// view can compare against to know whether its cached result still stands.
+  int get revision => _revision;
   String? get currentFileName => _currentFileName;
   List<PriceEntry> get entries => _entries;
   bool get isLoading => _loading;
@@ -202,6 +212,7 @@ class AppController extends ChangeNotifier {
     _currentFileName = fileName;
     _dirty = false;
     _loading = false;
+    _revision++;
     notifyListeners();
   }
 
@@ -254,6 +265,7 @@ class AppController extends ChangeNotifier {
       _entries[idx] = repository.loadEntry(updated.entryId) ?? updated;
     }
     _dirty = true;
+    _revision++;
     notifyListeners();
     _scheduleLocalSave();
   }
@@ -264,6 +276,7 @@ class AppController extends ChangeNotifier {
     final entry = repository.loadEntry(id)!;
     _entries.add(entry);
     _dirty = true;
+    _revision++;
     notifyListeners();
     _scheduleLocalSave();
     return entry;
@@ -276,6 +289,7 @@ class AppController extends ChangeNotifier {
     final removed = _entries.removeAt(idx);
     repository.deleteEntry(entryId);
     _dirty = true;
+    _revision++;
     notifyListeners();
     _scheduleLocalSave();
     return removed;

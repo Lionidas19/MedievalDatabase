@@ -4,3 +4,9 @@
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Local assistant notes, not project documentation
+CLAUDE.md
+
+# Python bytecode
+__pycache__/
