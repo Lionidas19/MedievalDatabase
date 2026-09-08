@@ -12,10 +12,39 @@ The Data sheet runs to 10,379 rows, but everything from row 7801 onward is an
 unfilled template row carrying only dropdown defaults — no year, place,
 category, quantity or price. Those are skipped on import.
 
+## Try it
+
+### → [lionidas19.github.io/MedievalDatabase](https://lionidas19.github.io/MedievalDatabase/)
+
+Nothing to install, nothing to sign in to, and nothing is uploaded anywhere.
+The database is delivered with the page and everything happens in your own
+browser — including any edits you make, which stay on your machine unless you
+download them yourself.
+
+There is an **Install as an app** item in the ⋮ menu (Chrome and Edge). Taking
+it gives the site a desktop icon and its own window, and stores everything
+locally, so it opens with no internet at all.
+
+**The Explorer** — all 7,800 records, filtered, sorted and grouped, with the
+price of each worked out in whatever unit you choose:
+
+![The Explorer, showing price records with a price per kilogram for each](docs/explorer.png)
+
+**Specifics lookup** — one plain answer, for when the table is more than the
+question needs: what a thing cost, on average, in a place and a span of years.
+It offers only what it can actually answer; a unit that cannot express the
+surviving records is struck out before you pick it.
+
+![The Specifics lookup form](docs/lookup.png)
+
+Three levels of detail — *Basics*, *More detail*, *Everything* — run through
+the whole app, so the table, the cards and the entry editor all show as much
+or as little as you want. See [How much to show](#how-much-to-show).
+
 ## Layout
 
 ```
-Copy of 1270s80sDatabase.xlsx    the source spreadsheet — the source of truth
+Copy of 1270s80sDatabase.xlsx    the source spreadsheet the first import came from
 tools/build_normalized_db.py     the original import from it, run once
 tools/check_incoming_db.py       reviews an updated database before it is published
 tools/migrate.py                 applies numbered schema changes to a database
@@ -26,7 +55,8 @@ tools/currency.py                reads the Currency sheet, for prices in modern 
 tools/validate_calculations.py   checks our results against the spreadsheet's
 tools/build_review_db.py         builds the questions file for the researcher
 app/                             the Flutter viewer/editor app
-app/data/                        the database the app ships with
+app/data/                        the database the app ships with — the source of truth
+docs/                            screenshots used by this README
 review/                          questions awaiting the researcher's answers
 ```
 
@@ -200,6 +230,29 @@ The published site is read-only in the sense that matters: visitors get their
 own copy to filter, edit and download, and no edit they make can reach anybody
 else. Publishing updated data means committing a new database and pushing —
 see "Publishing an updated database" below.
+
+## Installing it as an app
+
+The site can be installed, which gives it a desktop icon, its own window with
+no browser chrome, and — the point of it — everything cached locally, so it
+opens with no internet at all.
+
+In Chrome or Edge, an install icon appears at the right of the address bar
+once the page has loaded; failing that it is under the browser menu (Chrome:
+*Cast, save and share → Install page as app*). On a phone it is *Add to Home
+screen*.
+
+One visit online is enough. What that visit downloads — the engine, the fonts,
+the 9 MB database — is stored as it arrives, so the app can be opened offline
+straight afterwards without ever having been loaded a second time. Roughly
+20 MB in total.
+
+`web/sw.js` is what makes this work, and it names its cache after the
+`version:` line in `app/pubspec.yaml`. **Bump that version whenever you
+publish**, including for a data-only update: it is what tells an installed
+copy that what it is holding is superseded. The same number is shown in the
+corner of the app, so anybody reporting a problem can say which build they are
+looking at.
 
 ## Questions for the researcher
 

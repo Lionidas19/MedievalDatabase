@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/app_version.dart';
+import '../services/install_prompt.dart';
 import '../state/app_controller.dart';
 import '../state/view_preferences.dart';
 import '../theme.dart';
@@ -160,23 +162,73 @@ class _SideNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return NavigationRail(
-      selectedIndex: app.mode == ViewMode.advanced ? 0 : 1,
-      labelType: NavigationRailLabelType.all,
-      onDestinationSelected: (i) =>
-          app.setMode(i == 0 ? ViewMode.advanced : ViewMode.simple),
-      destinations: const [
-        NavigationRailDestination(
-          icon: Icon(Icons.table_chart_outlined),
-          selectedIcon: Icon(Icons.table_chart),
-          label: Text('Explorer'),
+    final scheme = Theme.of(context).colorScheme;
+    // The rail has no bottom slot of its own — its `trailing` sits directly
+    // under the destinations, which would read as a third one — so the version
+    // goes below the rail in a Column. The Column carries the rail's own
+    // colour so no seam shows where one ends and the other begins.
+    return ColoredBox(
+      color: scheme.surfaceContainerLow,
+      child: Column(
+        children: [
+          Expanded(
+            child: NavigationRail(
+              selectedIndex: app.mode == ViewMode.advanced ? 0 : 1,
+              labelType: NavigationRailLabelType.all,
+              onDestinationSelected: (i) =>
+                  app.setMode(i == 0 ? ViewMode.advanced : ViewMode.simple),
+              destinations: const [
+                NavigationRailDestination(
+                  icon: Icon(Icons.table_chart_outlined),
+                  selectedIcon: Icon(Icons.table_chart),
+                  label: Text('Explorer'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.eco_outlined),
+                  selectedIcon: Icon(Icons.eco),
+                  label: Text('Specifics lookup'),
+                ),
+              ],
+            ),
+          ),
+          const _VersionLabel(),
+        ],
+      ),
+    );
+  }
+}
+
+/// The build the reader is looking at, in the corner of the navigation rail.
+///
+/// Worth having in front of them rather than buried in a menu: the database
+/// travels between the researcher's browser and the published site, and the
+/// first question about anything that looks wrong is which version said it.
+class _VersionLabel extends StatelessWidget {
+  const _VersionLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: Spacing.sm,
+        right: Spacing.sm,
+        top: Spacing.sm,
+        bottom: Spacing.md,
+      ),
+      child: FutureBuilder<String>(
+        future: AppVersion.version,
+        builder: (context, snapshot) => Text(
+          // Empty until the bundle answers, which is a frame or two. A
+          // placeholder would flicker for longer than the value takes.
+          snapshot.data ?? '',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+            fontFeatures: const [tabularFigures],
+          ),
         ),
-        NavigationRailDestination(
-          icon: Icon(Icons.eco_outlined),
-          selectedIcon: Icon(Icons.eco),
-          label: Text('Specifics lookup'),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -382,6 +434,8 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
           tooltip: 'More',
           onSelected: (action) {
             switch (action) {
+              case _MenuAction.install:
+                promptToInstallApp();
               case _MenuAction.newEntry:
                 _addEntry(context, app);
               case _MenuAction.saveNow:
@@ -390,16 +444,32 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                 _resetToDefault(context, app);
             }
           },
-          itemBuilder: (context) => const [
-            PopupMenuItem(
+          // Built when the menu opens rather than once, because whether the
+          // browser is offering to install changes under us: the offer arrives
+          // a moment after load, and is gone once it has been taken up.
+          itemBuilder: (context) => [
+            if (canInstallApp)
+              const PopupMenuItem(
+                value: _MenuAction.install,
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: Icon(Icons.install_desktop, size: 20),
+                  title: Text('Install as an app'),
+                  // Says what installing gets them. 'Install' alone reads as
+                  // a download, which is the one thing this is not.
+                  subtitle: Text('Opens in its own window, and works offline'),
+                ),
+              ),
+            const PopupMenuItem(
               value: _MenuAction.newEntry,
               child: Text('New entry'),
             ),
-            PopupMenuItem(
+            const PopupMenuItem(
               value: _MenuAction.saveNow,
               child: Text('Save to this browser now'),
             ),
-            PopupMenuItem(
+            const PopupMenuItem(
               value: _MenuAction.resetToDefault,
               child: Text('Start again from the bundled database'),
             ),
@@ -474,4 +544,4 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-enum _MenuAction { newEntry, saveNow, resetToDefault }
+enum _MenuAction { install, newEntry, saveNow, resetToDefault }

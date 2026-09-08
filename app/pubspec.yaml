@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 0.0.1+1
 
 environment:
   sdk: ^3.11.4
@@ -68,6 +68,11 @@ flutter:
   # immediately on load, with no folder picker required.
   assets:
     - data/
+    # Read at runtime for the version in the corner of the navigation rail.
+    # Shipping the file is what keeps that number honest: the alternative is a
+    # constant in Dart, which is a second place for the version to live and
+    # drifts the first time somebody bumps one and forgets the other.
+    - pubspec.yaml
 
   # Bundled, not fetched. The app is meant to work with no internet at all,
   # and a webfont request is a network dependency like any other: offline it

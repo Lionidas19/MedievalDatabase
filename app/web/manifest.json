@@ -1,23 +1,27 @@
 {
-    "name": "price_explorer",
-    "short_name": "price_explorer",
+    "name": "Medieval Price Explorer",
+    "short_name": "Price Explorer",
+    "description": "English price records from the 1270s and 80s, with prices worked out in whatever unit you ask for.",
+    "lang": "en-GB",
     "start_url": ".",
+    "scope": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#FBF6EC",
+    "theme_color": "#F6EFE0",
     "prefer_related_applications": false,
+    "categories": ["education", "reference"],
     "icons": [
         {
             "src": "icons/Icon-192.png",
             "sizes": "192x192",
-            "type": "image/png"
+            "type": "image/png",
+            "purpose": "any"
         },
         {
             "src": "icons/Icon-512.png",
             "sizes": "512x512",
-            "type": "image/png"
+            "type": "image/png",
+            "purpose": "any"
         },
         {
             "src": "icons/Icon-maskable-192.png",
