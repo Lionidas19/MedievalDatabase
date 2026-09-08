@@ -248,9 +248,10 @@ straight afterwards without ever having been loaded a second time. Roughly
 20 MB in total.
 
 `web/sw.js` is what makes this work, and it names its cache after the
-`version:` line in `app/pubspec.yaml`. **Bump that version whenever you
-publish**, including for a data-only update: it is what tells an installed
-copy that what it is holding is superseded. The same number is shown in the
+`version:` line in `app/pubspec.yaml`. **Bump that version on every publish
+after the first**, data-only updates included: it is what tells an installed
+copy that what it is holding is superseded. The first release is the one that
+does not need it, having nothing to supersede. The same number is shown in the
 corner of the app, so anybody reporting a problem can say which build they are
 looking at.
 
