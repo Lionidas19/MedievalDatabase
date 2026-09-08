@@ -1,22 +1,55 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/app_version.dart';
+import '../services/install_prompt.dart';
 import '../state/app_controller.dart';
+import '../state/view_preferences.dart';
 import '../theme.dart';
+import 'display_settings.dart';
 import 'onboarding_screen.dart';
 import 'advanced/advanced_view.dart';
+import 'advanced/edit_entry_dialog.dart';
 import 'simple/simple_view.dart';
 
-class HomeShell extends StatelessWidget {
+class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
+
+  @override
+  State<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<HomeShell> {
+  bool _announcedRestore = false;
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppController>();
 
-    // hasData becomes true almost immediately (the bundled sample database
-    // loads with no folder picker needed); this only shows during that
-    // brief startup moment, or if even the bundled load somehow failed.
+    // Say so once, the first time a session picks up where the last left off.
+    // Silently loading someone's edited copy would be indistinguishable from
+    // loading the bundled one, which is exactly the confusion to avoid.
+    if (app.restoredFromLocal && !_announcedRestore && app.hasData) {
+      _announcedRestore = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+                'Picked up your saved copy from this browser, including any '
+                'edits from last time.'),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: 'Start fresh',
+              onPressed: () => _resetToDefault(context, app),
+            ),
+          ),
+        );
+      });
+    }
+
+    // hasData becomes true almost immediately; this only shows during that
+    // brief startup moment, or if the load somehow failed.
     if (!app.hasData) {
       return const Scaffold(body: OnboardingScreen());
     }
@@ -50,6 +83,29 @@ class HomeShell extends StatelessWidget {
   }
 }
 
+Future<void> _resetToDefault(BuildContext context, AppController app) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Start again from the bundled database?'),
+      content: const Text(
+        'This discards the copy saved in this browser, including every edit '
+        'made to it. Download a file first if you want to keep any of it.',
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Discard and reload')),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+  await app.resetToBundledDefault();
+}
+
 class _ErrorBanner extends StatelessWidget {
   const _ErrorBanner({required this.message});
   final String message;
@@ -66,7 +122,8 @@ class _ErrorBanner extends StatelessWidget {
             Icon(Icons.error_outline, size: 18, color: scheme.onErrorContainer),
             const SizedBox(width: 10),
             Expanded(
-              child: SelectableText(message, style: TextStyle(color: scheme.onErrorContainer)),
+              child: SelectableText(message,
+                  style: TextStyle(color: scheme.onErrorContainer)),
             ),
           ],
         ),
@@ -81,9 +138,20 @@ class _ModeBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mode = context.watch<AppController>().mode;
+    // Both views stay mounted so switching between them keeps filters,
+    // scroll position and a generated result. That has a cost the IndexedStack
+    // cannot avoid on its own: a view listening to settings is rebuilt when
+    // they change whether or not anybody can see it, and Specifics lookup is
+    // expensive to build — its dropdowns hold every locality and output unit
+    // the source knows. So each view is told whether it is the one on screen,
+    // and only that one subscribes.
+    final advanced = mode == ViewMode.advanced;
     return IndexedStack(
-      index: mode == ViewMode.advanced ? 0 : 1,
-      children: const [AdvancedView(), SimpleView()],
+      index: advanced ? 0 : 1,
+      children: [
+        AdvancedView(active: advanced),
+        SimpleView(active: !advanced),
+      ],
     );
   }
 }
@@ -94,23 +162,73 @@ class _SideNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return NavigationRail(
-      selectedIndex: app.mode == ViewMode.advanced ? 0 : 1,
-      labelType: NavigationRailLabelType.all,
-      onDestinationSelected: (i) =>
-          app.setMode(i == 0 ? ViewMode.advanced : ViewMode.simple),
-      destinations: const [
-        NavigationRailDestination(
-          icon: Icon(Icons.table_chart_outlined),
-          selectedIcon: Icon(Icons.table_chart),
-          label: Text('Explorer'),
+    final scheme = Theme.of(context).colorScheme;
+    // The rail has no bottom slot of its own — its `trailing` sits directly
+    // under the destinations, which would read as a third one — so the version
+    // goes below the rail in a Column. The Column carries the rail's own
+    // colour so no seam shows where one ends and the other begins.
+    return ColoredBox(
+      color: scheme.surfaceContainerLow,
+      child: Column(
+        children: [
+          Expanded(
+            child: NavigationRail(
+              selectedIndex: app.mode == ViewMode.advanced ? 0 : 1,
+              labelType: NavigationRailLabelType.all,
+              onDestinationSelected: (i) =>
+                  app.setMode(i == 0 ? ViewMode.advanced : ViewMode.simple),
+              destinations: const [
+                NavigationRailDestination(
+                  icon: Icon(Icons.table_chart_outlined),
+                  selectedIcon: Icon(Icons.table_chart),
+                  label: Text('Explorer'),
+                ),
+                NavigationRailDestination(
+                  icon: Icon(Icons.eco_outlined),
+                  selectedIcon: Icon(Icons.eco),
+                  label: Text('Specifics lookup'),
+                ),
+              ],
+            ),
+          ),
+          const _VersionLabel(),
+        ],
+      ),
+    );
+  }
+}
+
+/// The build the reader is looking at, in the corner of the navigation rail.
+///
+/// Worth having in front of them rather than buried in a menu: the database
+/// travels between the researcher's browser and the published site, and the
+/// first question about anything that looks wrong is which version said it.
+class _VersionLabel extends StatelessWidget {
+  const _VersionLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: Spacing.sm,
+        right: Spacing.sm,
+        top: Spacing.sm,
+        bottom: Spacing.md,
+      ),
+      child: FutureBuilder<String>(
+        future: AppVersion.version,
+        builder: (context, snapshot) => Text(
+          // Empty until the bundle answers, which is a frame or two. A
+          // placeholder would flicker for longer than the value takes.
+          snapshot.data ?? '',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+            fontFeatures: const [tabularFigures],
+          ),
         ),
-        NavigationRailDestination(
-          icon: Icon(Icons.eco_outlined),
-          selectedIcon: Icon(Icons.eco),
-          label: Text('Quick lookup'),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -134,9 +252,118 @@ class _BottomNav extends StatelessWidget {
         NavigationDestination(
           icon: Icon(Icons.eco_outlined),
           selectedIcon: Icon(Icons.eco),
-          label: 'Quick lookup',
+          label: 'Specifics lookup',
         ),
       ],
+    );
+  }
+}
+
+/// Shows where the working copy stands with private browser storage.
+///
+/// Worth being explicit rather than showing a generic "saved": this storage is
+/// private to one browser on one machine and cannot be found in a file
+/// manager, so anyone treating it as a filing system is heading for a bad day.
+class _SaveIndicator extends StatelessWidget {
+  const _SaveIndicator({required this.app});
+  final AppController app;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (icon, text, colour, tooltip) = switch (app.saveState) {
+      LocalSaveState.unsupported => (
+          Icons.cloud_off_outlined,
+          'Not saved',
+          scheme.onSurfaceVariant,
+          'This browser gives the app no private storage, so edits last only '
+              'until you close the tab. Download a file to keep your work.',
+        ),
+      LocalSaveState.saving => (
+          Icons.sync,
+          'Saving…',
+          scheme.onSurfaceVariant,
+          'Writing the working copy to this browser.',
+        ),
+      LocalSaveState.saved => (
+          Icons.check_circle_outline,
+          app.lastSavedAt == null ? 'Saved' : 'Saved ${_time(app.lastSavedAt!)}',
+          scheme.primary,
+          'Saved in this browser only — invisible to your file manager and '
+              'gone if you clear site data. Download a file for a copy you can '
+              'keep or send.',
+        ),
+      LocalSaveState.failed => (
+          Icons.error_outline,
+          'Save failed',
+          scheme.error,
+          'Could not write to this browser: ${app.saveError ?? 'unknown error'}. '
+              'Download a file so your work is not lost.',
+        ),
+      LocalSaveState.idle => (
+          Icons.cloud_done_outlined,
+          'No changes',
+          scheme.onSurfaceVariant,
+          'Nothing edited yet in this session.',
+        ),
+    };
+
+    return Tooltip(
+      message: tooltip,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: colour),
+            const SizedBox(width: 6),
+            Text(text,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: colour)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _time(DateTime t) {
+    String p2(int v) => v.toString().padLeft(2, '0');
+    return '${p2(t.hour)}:${p2(t.minute)}';
+  }
+}
+
+/// Opens the display settings, and says what the current detail level is.
+///
+/// The level is the setting most likely to be wrong for a given reader, and
+/// the one whose effect is easiest to mistake for missing data — a table
+/// showing five columns because it was left on Basics looks exactly like a
+/// database that only holds five things. So it is labelled, not just an icon.
+class _DisplayButton extends StatelessWidget {
+  const _DisplayButton({required this.compact});
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = context.watch<ViewPreferences>();
+    if (compact) {
+      return IconButton(
+        icon: const Icon(Icons.display_settings_outlined),
+        tooltip: 'Display settings',
+        onPressed: () => showDisplaySettings(context),
+      );
+    }
+    return Tooltip(
+      message: 'Detail, theme and row height',
+      child: TextButton.icon(
+        onPressed: () => showDisplaySettings(context),
+        // Not Icons.tune: the Explorer's filter button already wears it,
+        // and two identical icons on one screen read as two of the same
+        // control.
+        icon: const Icon(Icons.display_settings_outlined, size: 18),
+        label: Text('Showing: ${prefs.detailLevel.label.toLowerCase()}'),
+      ),
     );
   }
 }
@@ -165,10 +392,11 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
       actions: [
         if (!compact)
           Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.only(right: 4),
             child: Row(
               children: [
-                Icon(Icons.description_outlined, size: 16, color: scheme.onSurfaceVariant),
+                Icon(Icons.description_outlined,
+                    size: 16, color: scheme.onSurfaceVariant),
                 const SizedBox(width: 6),
                 Text(
                   app.currentFileName ?? '',
@@ -179,15 +407,17 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
               ],
             ),
           ),
-        if (app.isDirty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            child: Chip(
-              avatar: const Icon(Icons.circle, size: 10, color: Colors.orange),
-              label: const Text('Unsaved changes'),
-              visualDensity: VisualDensity.compact,
-            ),
+        _SaveIndicator(app: app),
+        const SizedBox(width: 4),
+        _DisplayButton(compact: compact),
+        const SizedBox(width: 4),
+        if (!compact)
+          OutlinedButton.icon(
+            onPressed: app.isLoading ? null : () => _addEntry(context, app),
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('New entry'),
           ),
+        const SizedBox(width: 8),
         OutlinedButton.icon(
           onPressed: app.isLoading ? null : () => _openFile(context, app),
           icon: const Icon(Icons.upload_file_outlined, size: 18),
@@ -195,23 +425,53 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
         ),
         const SizedBox(width: 8),
         FilledButton.icon(
-          onPressed: (app.isDirty && !app.isLoading) ? () => _download(context, app) : null,
+          onPressed: app.isLoading ? null : () => _download(context, app),
           icon: const Icon(Icons.download_outlined, size: 18),
-          label: const Text('Download changes'),
+          label: Text(app.isDirty ? 'Download changes' : 'Download a copy'),
         ),
         const SizedBox(width: 8),
         PopupMenuButton<_MenuAction>(
           tooltip: 'More',
           onSelected: (action) {
             switch (action) {
+              case _MenuAction.install:
+                promptToInstallApp();
+              case _MenuAction.newEntry:
+                _addEntry(context, app);
+              case _MenuAction.saveNow:
+                app.saveNow();
               case _MenuAction.resetToDefault:
                 _resetToDefault(context, app);
             }
           },
-          itemBuilder: (context) => const [
-            PopupMenuItem(
+          // Built when the menu opens rather than once, because whether the
+          // browser is offering to install changes under us: the offer arrives
+          // a moment after load, and is gone once it has been taken up.
+          itemBuilder: (context) => [
+            if (canInstallApp)
+              const PopupMenuItem(
+                value: _MenuAction.install,
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: Icon(Icons.install_desktop, size: 20),
+                  title: Text('Install as an app'),
+                  // Says what installing gets them. 'Install' alone reads as
+                  // a download, which is the one thing this is not.
+                  subtitle: Text('Opens in its own window, and works offline'),
+                ),
+              ),
+            const PopupMenuItem(
+              value: _MenuAction.newEntry,
+              child: Text('New entry'),
+            ),
+            const PopupMenuItem(
+              value: _MenuAction.saveNow,
+              child: Text('Save to this browser now'),
+            ),
+            const PopupMenuItem(
               value: _MenuAction.resetToDefault,
-              child: Text('Reload bundled default'),
+              child: Text('Start again from the bundled database'),
             ),
           ],
         ),
@@ -220,19 +480,45 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
     );
   }
 
+  Future<void> _addEntry(BuildContext context, AppController app) async {
+    final entry = app.createEntry();
+    if (!context.mounted) return;
+    final updated = await showEditEntryDialog(
+      context,
+      entry: entry,
+      repository: app.repository,
+      isNew: true,
+    );
+    if (updated == null) {
+      // Cancelled: do not leave an empty row behind.
+      app.deleteEntry(entry.entryId);
+      return;
+    }
+    app.applyEdit(updated);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Added entry #${updated.legacyEntryNo ?? ''}')),
+    );
+  }
+
   Future<void> _openFile(BuildContext context, AppController app) async {
     if (app.isDirty) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
-          title: const Text('Discard unsaved changes?'),
+          title: const Text('Replace the working copy?'),
           content: const Text(
-            'Opening a different file will replace what you\'re currently editing. '
-            'Download your changes first if you want to keep them.',
+            'Opening a different file replaces what you are editing, and what '
+            'is saved in this browser. Download your changes first if you want '
+            'to keep them.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Discard and open')),
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Replace and open')),
           ],
         ),
       );
@@ -256,24 +542,6 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
       SnackBar(content: Text('Downloaded as $name')),
     );
   }
-
-  Future<void> _resetToDefault(BuildContext context, AppController app) async {
-    if (app.isDirty) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Discard unsaved changes?'),
-          content: const Text('This reloads the database bundled with the app, discarding your edits.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Discard and reload')),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
-    }
-    await app.resetToBundledDefault();
-  }
 }
 
-enum _MenuAction { resetToDefault }
+enum _MenuAction { install, newEntry, saveNow, resetToDefault }
