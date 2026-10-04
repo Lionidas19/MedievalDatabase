@@ -194,6 +194,52 @@ class DatabaseRepository {
 
   // ----------------------------------------------------------- dimensions --
 
+  /// What one penny of each year is worth in the money being reported in.
+  ///
+  /// Two tables collapsed into one number per year, because that is all any
+  /// caller wants: `currency_factors` holds what a penny of that year was
+  /// worth in the base year's pounds, and the single row of
+  /// `currency_rebasing` carries the base year forward to the one being
+  /// reported in. Multiplying them here means `pricing.dart` takes one
+  /// factor and stays free of both tables.
+  ///
+  /// Empty when either side is missing, and that is the useful failure: every
+  /// modern figure then comes back null and the app shows a dash, rather than
+  /// a number resting on half a conversion.
+  Map<int, double> get modernPoundsPerPenny =>
+      _cached('modernPoundsPerPenny', () {
+        final rebasing = _db.select(
+            'SELECT multiplier FROM currency_rebasing WHERE id = 1');
+        final multiplier = rebasing.isEmpty
+            ? null
+            : (rebasing.first['multiplier'] as num?)?.toDouble();
+        if (multiplier == null) return <int, double>{};
+
+        final out = <int, double>{};
+        for (final row in _db.select(
+            'SELECT year, base_pounds_per_penny FROM currency_factors '
+            'WHERE base_pounds_per_penny IS NOT NULL')) {
+          out[row['year'] as int] =
+              (row['base_pounds_per_penny'] as num).toDouble() * multiplier;
+        }
+        return out;
+      });
+
+  /// The year the modern figures are expressed in, for labelling them.
+  ///
+  /// Read rather than hard-coded: it is in the database because it changes,
+  /// and a column headed with the wrong year is worse than one headed with
+  /// none.
+  int? get modernMoneyYear => _cached('modernMoneyYear', () {
+        final rows = _db.select(
+            'SELECT target_year, multiplier FROM currency_rebasing '
+            'WHERE id = 1');
+        if (rows.isEmpty || rows.first['multiplier'] == null) {
+          return const <int?>[null];
+        }
+        return <int?>[rows.first['target_year'] as int?];
+      }).first;
+
   List<LookupItem> get counties => _cached('counties', () => _db
       .select('SELECT county_id, name FROM counties ORDER BY name')
       .map((r) => LookupItem(r['county_id'] as String, r['name'] as String))

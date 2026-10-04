@@ -177,16 +177,20 @@ class _SideNav extends StatelessWidget {
               labelType: NavigationRailLabelType.all,
               onDestinationSelected: (i) =>
                   app.setMode(i == 0 ? ViewMode.advanced : ViewMode.simple),
-              destinations: const [
+              destinations: [
+                // The unselected icon sits in an outlined pill so it looks
+                // like something to press. Material gives the selected one a
+                // filled indicator and the other nothing at all, which read
+                // as a heading — and nobody pressed it.
                 NavigationRailDestination(
-                  icon: Icon(Icons.table_chart_outlined),
-                  selectedIcon: Icon(Icons.table_chart),
-                  label: Text('Explorer'),
+                  icon: _RailIcon(icon: Icons.table_chart_outlined),
+                  selectedIcon: const Icon(Icons.table_chart),
+                  label: const Text('Data Display'),
                 ),
                 NavigationRailDestination(
-                  icon: Icon(Icons.eco_outlined),
-                  selectedIcon: Icon(Icons.eco),
-                  label: Text('Specifics lookup'),
+                  icon: _RailIcon(icon: Icons.eco_outlined),
+                  selectedIcon: const Icon(Icons.eco),
+                  label: const Text('Advanced Search'),
                 ),
               ],
             ),
@@ -194,6 +198,26 @@ class _SideNav extends StatelessWidget {
           const _VersionLabel(),
         ],
       ),
+    );
+  }
+}
+
+/// An unselected rail icon, drawn inside a visible outline.
+class _RailIcon extends StatelessWidget {
+  const _RailIcon({required this.icon});
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(Radii.lg),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Icon(icon, size: 22),
     );
   }
 }
@@ -247,12 +271,12 @@ class _BottomNav extends StatelessWidget {
         NavigationDestination(
           icon: Icon(Icons.table_chart_outlined),
           selectedIcon: Icon(Icons.table_chart),
-          label: 'Explorer',
+          label: 'Data Display',
         ),
         NavigationDestination(
           icon: Icon(Icons.eco_outlined),
           selectedIcon: Icon(Icons.eco),
-          label: 'Specifics lookup',
+          label: 'Advanced Search',
         ),
       ],
     );
@@ -411,7 +435,12 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
         const SizedBox(width: 4),
         _DisplayButton(compact: compact),
         const SizedBox(width: 4),
-        if (!compact)
+        // Adding records is an editor's act, so it appears only once the
+        // reader has asked for Everything. Testing found people reaching the
+        // editor by accident; a button offering to create records, sitting in
+        // the toolbar above a table they came to read, is the same mistake
+        // one step earlier.
+        if (!compact && context.watch<ViewPreferences>().detailLevel.isEverything)
           OutlinedButton.icon(
             onPressed: app.isLoading ? null : () => _addEntry(context, app),
             icon: const Icon(Icons.add, size: 18),
@@ -461,10 +490,12 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                   subtitle: Text('Opens in its own window, and works offline'),
                 ),
               ),
-            const PopupMenuItem(
-              value: _MenuAction.newEntry,
-              child: Text('New entry'),
-            ),
+            // Gated with the toolbar button, for the same reason.
+            if (context.watch<ViewPreferences>().detailLevel.isEverything)
+              const PopupMenuItem(
+                value: _MenuAction.newEntry,
+                child: Text('New entry'),
+              ),
             const PopupMenuItem(
               value: _MenuAction.saveNow,
               child: Text('Save to this browser now'),

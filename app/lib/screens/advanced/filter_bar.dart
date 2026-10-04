@@ -8,6 +8,7 @@ import '../../services/pricing.dart';
 import '../../services/statistics.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
+import '../../widgets/filterable_dropdown.dart';
 
 /// Roughly a quarter of the database had no year at all when this filter was
 /// written. The year slider alone cannot express "show me those", and worse,
@@ -133,6 +134,7 @@ class FilterBar extends StatefulWidget {
     required this.stats,
     required this.statsWithEstimates,
     required this.brief,
+    required this.onReset,
   });
 
   final FilterState filters;
@@ -175,6 +177,14 @@ class FilterBar extends StatefulWidget {
   /// Drop the extras where horizontal room is short. Never the median, mean or
   /// mode: those are the figures that were asked for.
   final bool brief;
+
+  /// Put the whole question back to how the page opens.
+  ///
+  /// Distinct from "Clear all", which only appears once filters are active
+  /// and only empties those. A reader who has changed the unit into something
+  /// unanswerable has not set a filter at all, so that button is not even on
+  /// screen for them. This one always is.
+  final VoidCallback onReset;
 
   @override
   State<FilterBar> createState() => _FilterBarState();
@@ -279,22 +289,30 @@ class _FilterBarState extends State<FilterBar> {
             ),
           ),
         ),
-        SizedBox(
+        // The same typing-aware dropdown the Specifics lookup uses.
+        //
+        // As a bare DropdownMenu this was the single worst control in the
+        // app. Clicking it put the caret wherever the pointer landed, in the
+        // middle of the label, and the list did not narrow — so somebody
+        // trying to type "volume" got `volumtotototototo` in the box, a menu
+        // still showing everything, and no idea how to get back. Filtering
+        // and select-on-focus are what fix that, and both live in the shared
+        // widget.
+        FilterableDropdown<MetricItem?>(
           width: 230,
-          child: DropdownMenu<MetricItem?>(
-            width: 230,
-            label: const Text('Price per'),
-            initialSelection: widget.outputUnit,
-            onSelected: widget.onOutputUnitChanged,
-            dropdownMenuEntries: widget.outputUnits
-                .map((u) => DropdownMenuEntry(
-                      value: u,
-                      label: u.dimension == null
-                          ? u.name
-                          : '${u.name}  (${u.dimension})',
-                    ))
-                .toList(),
-          ),
+          value: widget.outputUnit,
+          label: 'Price per',
+          hint: 'type a unit',
+          entries: [
+            for (final u in widget.outputUnits)
+              DropdownMenuEntry(
+                value: u,
+                label: u.dimension == null
+                    ? u.name
+                    : '${u.name}  (${u.dimension})',
+              ),
+          ],
+          onSelected: widget.onOutputUnitChanged,
         ),
         OutlinedButton.icon(
           onPressed: () => setState(() => _expanded = !_expanded),
@@ -321,7 +339,19 @@ class _FilterBarState extends State<FilterBar> {
           _estimateChip(context),
           _groupMenu(context, prefs),
         ],
-        if (!widget.stats.isEmpty) _figures(context),
+        // Shown even when there is nothing to average.
+        //
+        // These used to disappear whenever the selection could not be priced,
+        // and a reader who had just changed the unit saw the figures drop off
+        // the screen with no explanation — the app looked broken rather than
+        // unable to answer. A row of dashes says the figures exist and this
+        // selection has none, which is a different and recoverable thing.
+        TextButton.icon(
+          onPressed: widget.onReset,
+          icon: const Icon(Icons.restart_alt, size: 18),
+          label: const Text('Reset'),
+        ),
+        _figures(context),
       ],
     );
   }
@@ -370,9 +400,31 @@ class _FilterBarState extends State<FilterBar> {
             one('mode', s.mode),
             if (!widget.brief) one('lowest', s.lowest),
             if (!widget.brief) one('highest', s.highest),
-            Text('of ${s.count}',
-                style:
-                    theme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+            // Priced by each entry's own measure, these figures average
+            // quarters against days against stones. The per-row answers are
+            // sound; a median across them is not, and saying so is the only
+            // honest way to show them at all.
+            if (!s.isEmpty && (widget.outputUnit?.isRecordedUnit ?? false))
+              Flexible(
+                child: Text(
+                  'across mixed measures',
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.bodySmall?.copyWith(color: scheme.error),
+                ),
+              )
+            else if (s.isEmpty)
+              Flexible(
+                child: Text(
+                  'none of these can be priced per '
+                  '${widget.outputUnit?.name ?? 'that unit'}',
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.bodySmall?.copyWith(color: scheme.error),
+                ),
+              )
+            else
+              Text('of ${s.count}',
+                  style: theme.bodySmall
+                      ?.copyWith(color: scheme.onSurfaceVariant)),
           ],
         );
 
@@ -387,7 +439,13 @@ class _FilterBarState extends State<FilterBar> {
           color: scheme.outlineVariant,
         ),
         Tooltip(
-          message: withEstimates == null
+          message: (widget.outputUnit?.isRecordedUnit ?? false)
+              ? 'Each entry is priced by the measure the source used for it, '
+                  'so these figures average different measures together. Use '
+                  'them to see the shape of the selection, not to compare one '
+                  'record with another. Pick a single unit at Price per for '
+                  'figures that can be compared.'
+              : withEstimates == null
               ? 'Across every entry these filters left that the source can '
                   'price, in the unit chosen at Price per.'
               : 'The upper figures count only prices the source records. The '

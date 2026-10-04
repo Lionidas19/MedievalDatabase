@@ -69,12 +69,13 @@ void main() {
   }) =>
       EntryTable(
         groups: groups,
-        columns: columnsFor(level, 'Kilograms'),
+        columns: columnsFor(level, 'Kilograms', modernYear: 2026),
         rowHeight: density.rowHeight,
         sortColumnId: 'year',
         ascending: true,
         onSort: (_) {},
         onOpen: (_) {},
+        onRead: (_) {},
         unitName: 'Kilograms',
         showGroupHeaders: grouped,
       );
@@ -273,6 +274,69 @@ void main() {
         size: const Size(700, 500),
       ));
       expect(tester.takeException(), isNull, reason: level.name);
+    }
+  });
+
+  // The safety-critical one. A tap used to open the editor, and a tester
+  // changed a record they only meant to look at — with no way afterwards to
+  // say which record it had been.
+  testWidgets('a row tap opens the record to read, never to edit',
+      (tester) async {
+    PricedEntry? read;
+    PriceEntry? edited;
+
+    await tester.pumpWidget(harness(EntryTable(
+      groups: [
+        group('', [priced()])
+      ],
+      columns: columnsFor(DetailLevel.basics, 'Kilograms'),
+      rowHeight: TableDensity.comfortable.rowHeight,
+      sortColumnId: 'year',
+      ascending: true,
+      onSort: (_) {},
+      onOpen: (e) => edited = e,
+      onRead: (p) => read = p,
+      unitName: 'Kilograms',
+      showGroupHeaders: false,
+    )));
+
+    // The place cell: inside the row, and well away from the edit button.
+    await tester.tap(find.text('Cranfield, Bedfordshire'));
+    await tester.pump();
+
+    expect(read, isNotNull, reason: 'a tap should open the record to read');
+    expect(edited, isNull, reason: 'a tap must never open the editor');
+  });
+
+  // The researcher asked for a modern equivalent visible "with no effort",
+  // so it is at every detail level rather than behind Everything.
+  test('modern money shows from Basics, and only when there are factors', () {
+    for (final level in DetailLevel.values) {
+      final withFactors = columnsFor(level, 'Kilograms', modernYear: 2026);
+      expect(withFactors.map((c) => c.id), contains('modernPrice'),
+          reason: '$level should carry the modern price');
+      expect(withFactors.firstWhere((c) => c.id == 'modernPrice').label,
+          'In 2026 money');
+
+      // No factors in the database means no column, rather than a column of
+      // dashes that reads as a broken app.
+      final without = columnsFor(level, 'Kilograms');
+      expect(without.map((c) => c.id), isNot(contains('modernPrice')));
+      expect(without.map((c) => c.id), isNot(contains('modernPerUnit')));
+    }
+  });
+
+  test('modern money is sortable and explains itself', () {
+    final columns = columnsFor(DetailLevel.everything, 'Kilograms',
+        modernYear: 2026);
+    for (final id in ['modernPrice', 'modernPerUnit']) {
+      final column = columns.firstWhere((c) => c.id == id);
+      expect(column.sortKey, isNotNull, reason: '$id should be sortable');
+      expect(column.explanation, isNotNull,
+          reason: '$id is a derived figure and must say what it is');
+      // It is a guide to scale, not a valuation. If that caveat ever
+      // disappears the column starts claiming more than it can support.
+      expect(column.explanation, contains('scale'));
     }
   });
 }

@@ -52,6 +52,23 @@ class LookupItem {
 class MetricItem {
   const MetricItem(this.id, this.name, this.metricValue, {this.dimension});
 
+  /// "Whatever the source measured this by", rather than a unit of our own.
+  ///
+  /// Every other option here converts a record into one common unit so that
+  /// records can be compared. This one does the opposite: it reports each
+  /// entry's price against its own valuation measure, which is the one figure
+  /// that always exists wherever there is a price at all. It is the default
+  /// because a reader who changes the unit and gets nothing back has no way
+  /// of knowing they have asked an unanswerable question, and needs somewhere
+  /// to return to.
+  ///
+  /// The id is not a UUID on purpose: nothing in the database has this id, so
+  /// it can never collide with a real measure or survive being saved.
+  static const recordedUnit =
+      MetricItem('__recorded__', 'Recorded unit', null);
+
+  bool get isRecordedUnit => id == recordedUnit.id;
+
   final String id;
   final String name;
   final double? metricValue;
@@ -254,14 +271,24 @@ class PriceEntry {
   ///
   /// Counting cattle by the head and then asking their price per kilogram is
   /// arithmetic the source will happily perform and nobody should believe.
-  bool canBePricedPer(MetricItem? unit) =>
-      primaryMeasure?.comparableWith(unit) ?? true;
+  bool canBePricedPer(MetricItem? unit) {
+    // Nothing is converted, so nothing can fail to convert.
+    if (unit != null && unit.isRecordedUnit) return true;
+    return primaryMeasure?.comparableWith(unit) ?? true;
+  }
 
   /// Runs the recovered calculation chain for this entry.
   ///
   /// Pass [outputY] to answer "what is this per kilogram / per Tower pound?";
   /// omit it to use the entry's own recorded default.
-  PriceCalculation calculate({MetricItem? outputY}) {
+  /// [modernPoundsPerPenny] is what one penny of this entry's year is worth
+  /// today; see `DatabaseRepository.modernPoundsPerPenny`. Omit it and the
+  /// modern figures come back null, which is what every caller that does not
+  /// care about them already gets.
+  PriceCalculation calculate({
+    MetricItem? outputY,
+    double? modernPoundsPerPenny,
+  }) {
     final chosen = outputY ?? this.outputY;
     return calculatePrice(
       quantities: [
@@ -274,6 +301,7 @@ class PriceEntry {
       multiplierWorkers: multiplierWorkers,
       outputXMetric: outputX?.metricValue,
       outputYMetric: chosen?.metricValue,
+      modernPoundsPerPenny: modernPoundsPerPenny,
     );
   }
 

@@ -115,16 +115,49 @@ CalendarDate? parseRecordedDate(int? year, String? periodName, int? day) {
 
 /// The calendar problem that actually affects this database.
 ///
-/// Medieval English years commonly began on 25 March, not 1 January, so a
-/// record written "January 1275" may be January 1276 by modern reckoning.
-/// That shifts a *year*, not seven days, and it potentially touches every
-/// entry rather than the hundred-odd with a full date.
+/// These prices come from manorial and obedientiary account rolls, and those
+/// run **Michaelmas to Michaelmas** — 29 September — not from 1 January. So a
+/// record written "January 1275" may sit in the accounting year that modern
+/// reckoning would call 1276. That shifts a *year*, not seven days, and it
+/// potentially touches every entry rather than the hundred-odd carrying a
+/// full date.
 ///
-/// Which convention Thorold Rogers used when he compiled these figures is a
-/// question for the researcher, and until it is answered the app displays
-/// years exactly as recorded and says so rather than silently adjusting them.
-const ladyDayCaveat =
-    'Years are shown exactly as the source records them. Medieval English '
-    'years often began on 25 March, so a date recorded early in the year may '
-    'fall in the following year by modern reckoning — this has not been '
+/// This said 25 March until the researcher corrected it. Both conventions did
+/// exist and they are not the same thing: 25 March (Lady Day) is how a
+/// document was *dated* by the year of grace, while Michaelmas is where the
+/// *accounting* year turned, and an account roll is what these figures were
+/// read off.
+///
+/// Michaelmas is 29 September in the Julian calendar these rolls were kept
+/// in. For **this** database that is 6 October by modern reckoning, flatly:
+/// the two calendars are seven days apart for every year from 1200 to 1299,
+/// so across 1270 to 1291 there is no drift at all and no range to give.
+///
+/// The gap does move, but only at century boundaries, because the Julian
+/// calendar takes a leap year every fourth year without exception, which is
+/// slightly too often. It therefore slips about a day every 128 years against
+/// the sun, and the Gregorian reform's skipped centurial leap days are what
+/// correct it. So 29 September is 7 October from 1300, 8 October from 1400
+/// and 9 October from 1500. Nothing here hard-codes seven days: the
+/// conversion above goes through Julian Day Numbers and stays right if the
+/// data ever reaches past 1300, which the Currency tab's 1519 range suggests
+/// is intended.
+///
+/// An earlier draft said "as late as 11 October", from a figure in the
+/// researcher's own working notes that had the gap at fourteen days rather
+/// than seven. They have since agreed 6 October is right.
+///
+/// On which convention Thorold Rogers himself followed, the researcher's
+/// reading is that he kept the historically written Julian dates rather than
+/// normalising them, but that is **not yet confirmed**. Until it is, the app
+/// displays years exactly as recorded and says so rather than silently
+/// adjusting them. If it is ever confirmed the other way, this note changes
+/// and nothing else does: no stored year depends on it.
+const michaelmasCaveat =
+    'Years are shown exactly as the source records them. These prices come '
+    'from account rolls, whose year ran from Michaelmas rather than from '
+    '1 January: 29 September in the Julian calendar these records keep, which '
+    'is 6 October by ours. A date recorded early in the year may therefore '
+    'fall in the following year by modern reckoning. This has not been '
     'adjusted for.';
+

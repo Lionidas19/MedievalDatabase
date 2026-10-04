@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
+import '../../services/database_repository.dart';
 import '../../services/pricing.dart';
 import '../../state/app_controller.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
 import '../../widgets/autocomplete_field.dart';
+import '../../widgets/filterable_dropdown.dart';
 import 'facets.dart';
 import '../advanced/advanced_view.dart' show openEntryEditor;
 
@@ -155,6 +157,13 @@ class _SimpleViewState extends State<SimpleView> {
   bool _showEntries = false;
   bool _generated = false;
 
+  /// Where the answer appears, so the screen can be taken to it.
+  ///
+  /// Generate results used to change something a long way below the fold, and
+  /// with no visible scrollbar the button looked broken: people pressed it,
+  /// saw nothing move, and pressed it again.
+  final _resultKey = GlobalKey();
+
   /// What is typed in the item search, which is not the same as what it
   /// resolved to — a half-typed word names nothing yet.
   String _itemSearch = '';
@@ -271,7 +280,7 @@ class _SimpleViewState extends State<SimpleView> {
     final (minYear, maxYear) = repo.yearRange;
     _yearRange ??= RangeValues(minYear.toDouble(), maxYear.toDouble());
 
-    final outputUnits = repo.outputUnitChoices;
+    final outputUnits = [MetricItem.recordedUnit, ...repo.outputUnitChoices];
     _outputUnit ??= _defaultOutputUnit(outputUnits);
 
     final categories = repo.categories;
@@ -317,7 +326,7 @@ class _SimpleViewState extends State<SimpleView> {
                           ),
                           const SizedBox(width: 10),
                           Text(
-                            'Specifics lookup',
+                            'Advanced Search',
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                         ],
@@ -491,9 +500,7 @@ class _SimpleViewState extends State<SimpleView> {
                             ),
                             label: 'Search all three levels',
                             initialValue: _itemSearch,
-                            suggestions: repo.taxonomyPaths
-                                .map((t) => t.label)
-                                .toList(),
+                            suggestions: _suggestionOrder(app, repo),
                             helperText: 'e.g. wheat, oxen, thatching',
                             onChanged: (text) => setState(() {
                               _itemSearch = text;
@@ -688,7 +695,24 @@ class _SimpleViewState extends State<SimpleView> {
                           FilledButton.icon(
                             onPressed: _category == null
                                 ? null
-                                : () => setState(() => _generated = true),
+                                : () {
+                                    setState(() => _generated = true);
+                                    // After the frame, because the results do
+                                    // not exist to scroll to until this
+                                    // setState has been built.
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                      final box = _resultKey.currentContext;
+                                      if (box == null) return;
+                                      Scrollable.ensureVisible(
+                                        box,
+                                        duration: const Duration(
+                                            milliseconds: 350),
+                                        curve: Curves.easeOutCubic,
+                                        alignment: 0.05,
+                                      );
+                                    });
+                                  },
                             icon: const Icon(Icons.auto_awesome, size: 18),
                             label: const Text('Generate results'),
                           ),
@@ -699,6 +723,7 @@ class _SimpleViewState extends State<SimpleView> {
                 ),
               ),
               if (_generated && _category != null) ...[
+                KeyedSubtree(key: _resultKey, child: const SizedBox.shrink()),
                 const SizedBox(height: 20),
                 _ResultCard(
                   level: level,
@@ -723,17 +748,52 @@ class _SimpleViewState extends State<SimpleView> {
     );
   }
 
-  /// Kilograms is the unit a lay reader expects; fall back to whatever the
-  /// source offers if it is absent.
-  MetricItem? _defaultOutputUnit(List<MetricItem> units) {
-    if (units.isEmpty) return null;
-    for (final name in ['Kilograms', 'Grams', 'Litres']) {
-      for (final u in units) {
-        if (u.name == name) return u;
-      }
+  /// Item suggestions, commonest first rather than alphabetical.
+  ///
+  /// Typing 'oats' used to offer 'Agricultural Labour / Mowing / Oats
+  /// (Mowing)' before 'Food / Grain / Oats', because A sorts before F. The
+  /// reader almost always wants the one the source has most of, so the list is
+  /// ordered by how many entries actually sit under each path. Ties keep
+  /// alphabetical order, so the list is still predictable where the counts
+  /// say nothing.
+  ///
+  /// Counted once per data revision: it walks all 7,800 entries, and the
+  /// search box rebuilds on every keystroke.
+  int? _suggestionRevision;
+  List<String> _suggestions = const [];
+
+  List<String> _suggestionOrder(AppController app, DatabaseRepository repo) {
+    if (_suggestionRevision == app.revision) return _suggestions;
+    _suggestionRevision = app.revision;
+
+    final uses = <String, int>{};
+    void count(String? name) {
+      if (name == null || name.isEmpty) return;
+      uses[name] = (uses[name] ?? 0) + 1;
     }
-    return units.first;
+
+    for (final e in app.entries) {
+      count(e.category);
+      count(e.subcategory);
+      count(e.specific);
+    }
+
+    final paths = List<TaxonomyPath>.of(repo.taxonomyPaths);
+    paths.sort((TaxonomyPath a, TaxonomyPath b) {
+      final byUse = (uses[b.leaf] ?? 0).compareTo(uses[a.leaf] ?? 0);
+      return byUse != 0 ? byUse : a.label.compareTo(b.label);
+    });
+    return _suggestions = [for (final path in paths) path.label];
   }
+
+  /// The measure the source itself used: the one answer that always exists.
+  ///
+  /// See [MetricItem.recordedUnit]. This was Kilograms, which left a reader
+  /// who picked a unit the selection cannot express with an empty screen and
+  /// no way back.
+  MetricItem? _defaultOutputUnit(List<MetricItem> units) =>
+      MetricItem.recordedUnit;
+
 
   /// A short list for the simple view. 97 output units is a research tool, not
   /// a question to put to somebody who wants the price of wheat.
@@ -743,6 +803,7 @@ class _SimpleViewState extends State<SimpleView> {
     // sold by the head; offering only units of mass left those categories
     // with nothing to be priced in at all.
     const wanted = [
+      'Recorded unit',
       'Kilograms',
       'Grams',
       'Litres',
@@ -843,7 +904,7 @@ class _SimpleViewState extends State<SimpleView> {
     required List<DropdownMenuEntry<T>> entries,
     required ValueChanged<T> onSelected,
     bool enabled = true,
-  }) => _FilterableDropdown<T>(
+  }) => FilterableDropdown<T>(
     width: width,
     value: value,
     hint: hint,
@@ -851,181 +912,6 @@ class _SimpleViewState extends State<SimpleView> {
     onSelected: onSelected,
     enabled: enabled,
   );
-}
-
-/// A dropdown you can type into, that keeps only what it offered.
-///
-/// `DropdownMenu` is a text field with a menu attached, and by default it does
-/// neither of the two things a reader expects of that: typing does not narrow
-/// the list, and whatever is typed simply stays. A category could be left
-/// reading 'dasdwadsd' — a value no record has, silently filtering everything
-/// away.
-///
-/// So: typing filters the options, and anything left in the box that is not
-/// one of them is put back to the current selection when the field loses
-/// focus. There is no third state where the box says one thing and the query
-/// means another.
-class _FilterableDropdown<T> extends StatefulWidget {
-  const _FilterableDropdown({
-    required this.width,
-    required this.value,
-    required this.hint,
-    required this.entries,
-    required this.onSelected,
-    this.enabled = true,
-  });
-
-  final double width;
-  final T value;
-  final String hint;
-  final List<DropdownMenuEntry<T>> entries;
-  final ValueChanged<T> onSelected;
-  final bool enabled;
-
-  /// Whether the list offers a "no choice" row, and so whether un-choosing is
-  /// a thing the reader can mean here.
-  bool get canClear => entries.any((e) => e.value == null);
-
-  @override
-  State<_FilterableDropdown<T>> createState() => _FilterableDropdownState<T>();
-}
-
-class _FilterableDropdownState<T> extends State<_FilterableDropdown<T>> {
-  final _controller = TextEditingController();
-
-  /// Whether the control or anything inside it holds focus.
-  ///
-  /// Observed from the outside with a [Focus] wrapper rather than by handing
-  /// `DropdownMenu` a FocusNode of our own: doing the latter stops its text
-  /// field from ever taking focus, so typing reaches nothing and the list
-  /// never filters. That cost an hour; do not put it back.
-  bool _hasFocus = false;
-
-  String get _selectedLabel {
-    for (final e in widget.entries) {
-      if (e.value == widget.value) return e.label;
-    }
-    return '';
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _controller.text = _selectedLabel;
-  }
-
-  @override
-  void didUpdateWidget(_FilterableDropdown<T> old) {
-    super.didUpdateWidget(old);
-    // Follow a selection made elsewhere — choosing a category empties the
-    // subcategory beneath it, and the box has to say so.
-    if (widget.value != old.value && _controller.text != _selectedLabel) {
-      _controller.text = _selectedLabel;
-    }
-  }
-
-  /// Highlights the whole label the moment the field is entered.
-  ///
-  /// The caret otherwise lands wherever the reader happened to click, so the
-  /// first keystroke goes *into* the label: clicking the middle of "Any
-  /// category" and typing "produce" leaves "Any cateproducegory", which
-  /// matches nothing, and the menu opens empty. Highlighted, the label stays
-  /// readable and the first keystroke replaces it — what a box you can type
-  /// into is expected to do. It also makes a single Backspace enough to empty
-  /// the field, which is how a choice gets undone from the keyboard.
-  ///
-  /// After the frame, because the tap that handed us focus places the caret
-  /// itself, and does that later than this callback runs.
-  void _selectAllOnEntry() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_hasFocus) return;
-      _controller.selection =
-          TextSelection(baseOffset: 0, extentOffset: _controller.text.length);
-    });
-  }
-
-  /// Puts junk back once the field is really finished with.
-  ///
-  /// A moment's grace first: focus flickers as the menu opens and closes, and
-  /// restoring on the first blur would wipe what is being typed.
-  void _restoreOnBlur() {
-    Future<void>.delayed(const Duration(milliseconds: 400), () {
-      if (!mounted || _hasFocus) return;
-      final text = _controller.text.trim();
-      if (text == _selectedLabel) return;
-
-      // An emptied box means the reader wants nothing chosen here. The first
-      // version simply put the old value back, so a category once chosen
-      // could not be un-chosen at all.
-      if (text.isEmpty && widget.canClear) {
-        if (widget.value != null) widget.onSelected(null as T);
-        return;
-      }
-      // Text naming a real option is a reader mid-thought, not junk.
-      if (widget.entries.any((e) => e.label == text)) return;
-      _controller.text = _selectedLabel;
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      canRequestFocus: false,
-      skipTraversal: true,
-      onFocusChange: (has) {
-        _hasFocus = has;
-        if (has) {
-          _selectAllOnEntry();
-        } else {
-          _restoreOnBlur();
-        }
-      },
-      child: SizedBox(
-        width: widget.width,
-        child: DropdownMenu<T>(
-          width: widget.width,
-          enabled: widget.enabled,
-          hintText: widget.hint,
-          controller: _controller,
-          initialSelection: widget.value,
-          // The two that make typing mean something.
-          enableFilter: true,
-          requestFocusOnTap: true,
-          // Bounded, so the menu drops below the field instead of growing
-          // tall enough that it has to flip up and cover the very text being
-          // typed into it.
-          menuHeight: 320,
-          // A cross while something is chosen, in place of the arrow.
-          //
-          // The list does carry an "Any ..." row, but the menu opens scrolled
-          // to whatever is selected, so that row is usually above the fold and
-          // no help at all. Un-choosing needs to be visible without hunting.
-          trailingIcon: widget.value != null && widget.canClear
-              ? IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: 'Clear',
-                  onPressed: () {
-                    _controller.clear();
-                    widget.onSelected(null as T);
-                  },
-                )
-              : null,
-          dropdownMenuEntries: widget.entries,
-          onSelected: (v) {
-            if (v != null || widget.entries.any((e) => e.value == null)) {
-              widget.onSelected(v as T);
-            }
-          },
-        ),
-      ),
-    );
-  }
 }
 
 class _ResultCard extends StatelessWidget {
@@ -1041,6 +927,12 @@ class _ResultCard extends StatelessWidget {
     // Every value is computed in the same reader-chosen unit, so averaging
     // them is meaningful. Reading a stored per-unit column instead would mix
     // quarters, kilograms and acres into one meaningless number.
+    // Each entry converted by the factor for *its own* year, and only then
+    // averaged. Converting the average instead would need one factor for a
+    // span of years that has several, and would quietly pick one.
+    final modern = app.repository.modernPoundsPerPenny;
+    final modernValues = <double>[];
+
     final priced = <(PriceEntry, double)>[];
     var unpriced = 0;
     var wrongKind = 0;
@@ -1052,15 +944,32 @@ class _ResultCard extends StatelessWidget {
         wrongKind++;
         continue;
       }
-      final v = e.calculate(outputY: query.outputUnit).pencePerOutputY;
+      // Against its own valuation measure the answer is the recorded price
+      // itself, with nothing to convert. See [MetricItem.recordedUnit].
+      final calc = e.calculate(
+        outputY: query.outputUnit,
+        modernPoundsPerPenny: modern[e.year],
+      );
+      final v = (query.outputUnit?.isRecordedUnit ?? false)
+          ? calc.priceInPence
+          : calc.pencePerOutputY;
       if (v == null || !v.isFinite) {
         unpriced++;
       } else {
         priced.add((e, v));
+        final m = (query.outputUnit?.isRecordedUnit ?? false)
+            ? calc.modernPerValuationMeasure
+            : calc.modernPerOutputY;
+        if (m != null && m.isFinite) modernValues.add(m);
       }
     }
     final values = priced.map((p) => p.$2).toList()..sort();
-    final unitName = query.outputUnit?.name ?? 'unit';
+    modernValues.sort();
+    // Lower case in a sentence: "1.6 pence per recorded unit" reads as
+    // English, "per Recorded unit" reads as a variable name.
+    final unitName = (query.outputUnit?.isRecordedUnit ?? false)
+        ? 'recorded unit'
+        : query.outputUnit?.name ?? 'unit';
 
     return Card(
       child: Padding(
@@ -1068,7 +977,10 @@ class _ResultCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(query.label, style: Theme.of(context).textTheme.titleMedium),
+            // The deepest level the reader asked for, set apart from the
+            // branch above it — the same emphasis the table gives the item
+            // column, so an answer is recognisably about the same thing.
+            _QueryLabel(query: query),
             const SizedBox(height: 4),
             Text(
               '${matches.length} matching entr${matches.length == 1 ? 'y' : 'ies'} '
@@ -1099,6 +1011,13 @@ class _ResultCard extends StatelessWidget {
                 value: _stat(values, query.kind),
                 unitName: unitName,
                 sampleSize: values.length,
+                // The same statistic over the converted figures, not the
+                // statistic converted: the sample spans years with different
+                // factors.
+                modern: modernValues.isEmpty
+                    ? null
+                    : _stat(modernValues, query.kind),
+                modernYear: app.repository.modernMoneyYear,
               )
             else
               Text(
@@ -1107,6 +1026,23 @@ class _ResultCard extends StatelessWidget {
             if (level.isEverything && values.isNotEmpty) ...[
               const SizedBox(height: Spacing.md),
               _Spread(values: values, unitName: unitName),
+            ],
+            // Priced by each entry's own measure, an average here adds
+            // quarters to days to stones. Every individual figure is sound;
+            // the number on top of them is not comparable, and a reader
+            // deserves to know which of those they are looking at.
+            if (values.isNotEmpty &&
+                (query.outputUnit?.isRecordedUnit ?? false)) ...[
+              const SizedBox(height: 10),
+              _note(
+                context,
+                'Each entry is priced by the measure the source used for it, '
+                'so this average covers different measures at once. It shows '
+                'the shape of the selection rather than a figure you can '
+                'compare with another. Choose a single unit above for that.',
+                Theme.of(context).colorScheme.error,
+                Icons.straighten,
+              ),
             ],
             if (values.isNotEmpty && _isWidelySpread(values)) ...[
               const SizedBox(height: 10),
@@ -1234,18 +1170,37 @@ class _ResultCard extends StatelessWidget {
   }
 }
 
+/// Pounds, rounded no finer than the conversion can support.
+///
+/// "about" precedes it everywhere it is shown: the factor behind it is quoted
+/// to two decimals and rests on a scholarly judgement, so a figure to the
+/// penny would be claiming a precision nobody has.
+String _poundsLabel(double value) {
+  if (value >= 1000) return '\u00a3${value.round()}';
+  if (value >= 1) return '\u00a3${value.toStringAsFixed(2)}';
+  return '\u00a3${value.toStringAsFixed(3)}';
+}
+
 class _StatTile extends StatelessWidget {
   const _StatTile({
     required this.label,
     required this.value,
     required this.unitName,
     required this.sampleSize,
+    this.modern,
+    this.modernYear,
   });
 
   final String label;
   final double value;
   final String unitName;
   final int sampleSize;
+
+  /// The same statistic over the same entries, each converted by its own
+  /// year's factor before averaging. Null where the database has no factors,
+  /// or where none of the sampled entries could be converted.
+  final double? modern;
+  final int? modernYear;
 
   @override
   Widget build(BuildContext context) {
@@ -1276,6 +1231,14 @@ class _StatTile extends StatelessWidget {
                     color: scheme.onPrimaryContainer,
                   ),
                 ),
+                if (modern != null && modernYear != null)
+                  Text(
+                    'about ${_poundsLabel(modern!)} in $modernYear money',
+                    style: TextStyle(
+                      color: scheme.onPrimaryContainer.withValues(alpha: 0.9),
+                      fontSize: 15,
+                    ),
+                  ),
                 Text(
                   'from $sampleSize priced '
                   '${sampleSize == 1 ? 'entry' : 'entries'}',
@@ -1318,6 +1281,43 @@ class _EntryTile extends StatelessWidget {
       ),
       trailing: const Icon(Icons.chevron_right, size: 18),
       onTap: () => openEntryEditor(context, entry),
+    );
+  }
+}
+
+/// The question this answer is to, with its last level carrying the weight.
+class _QueryLabel extends StatelessWidget {
+  const _QueryLabel({required this.query});
+  final _Query query;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final base = Theme.of(context).textTheme.titleMedium;
+    final parts = [query.category?.name, query.subcategory?.name,
+            query.specific?.name]
+        .where((p) => p != null && p.isNotEmpty)
+        .cast<String>()
+        .toList();
+    if (parts.isEmpty) return Text('—', style: base);
+
+    return Text.rich(
+      TextSpan(
+        children: [
+          if (parts.length > 1)
+            TextSpan(
+              text: '${parts.sublist(0, parts.length - 1).join(' / ')} / ',
+              style: base?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          TextSpan(
+            text: parts.last,
+            style: base?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
     );
   }
 }

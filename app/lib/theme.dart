@@ -242,9 +242,55 @@ class AppTheme {
           side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.5)),
         ),
       ),
+      // Scrollbars have to be *seen*, not discovered.
+      //
+      // Material's default thumb is a thin, low-opacity grey. On parchment it
+      // is all but invisible, and watching people use this showed exactly what
+      // that costs: readers did not know the table continued sideways, and did
+      // not know they could move down it at all. On a table of 7,800 rows and
+      // twenty-three columns, a scrollbar is not decoration — it is the only
+      // thing saying there is more.
+      scrollbarTheme: ScrollbarThemeData(
+        // Always, not just while moving. A bar that fades once you stop
+        // answers the question only for somebody who already knew to ask.
+        thumbVisibility: const WidgetStatePropertyAll(true),
+        trackVisibility: const WidgetStatePropertyAll(true),
+        thickness: const WidgetStatePropertyAll(10),
+        radius: const Radius.circular(5),
+        // The seed brown rather than a grey: it reads as part of this app, and
+        // it holds its own against the warm ground behind it.
+        thumbColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.hovered) || states.contains(WidgetState.dragged)
+                ? scheme.primary
+                : scheme.primary.withValues(alpha: 0.55)),
+        trackColor: WidgetStatePropertyAll(
+            scheme.onSurface.withValues(alpha: 0.06)),
+        trackBorderColor: const WidgetStatePropertyAll(Colors.transparent),
+        crossAxisMargin: 2,
+        mainAxisMargin: 2,
+      ),
       navigationRailTheme: NavigationRailThemeData(
         backgroundColor: scheme.surfaceContainerLow,
         indicatorColor: scheme.primaryContainer,
+        // Both destinations read as controls, not just the chosen one.
+        //
+        // Only the selected item had a shape around it, so the other looked
+        // like a caption — and in testing nobody pressed it. The unselected
+        // label now carries the same weight and enough contrast to look
+        // pressable; the selected one keeps the filled indicator, so which is
+        // which is still obvious.
+        selectedLabelTextStyle: TextStyle(
+          color: scheme.onSurface,
+          fontWeight: FontWeight.w700,
+          fontSize: 12,
+        ),
+        unselectedLabelTextStyle: TextStyle(
+          color: scheme.onSurface,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+        selectedIconTheme: IconThemeData(color: scheme.onPrimaryContainer),
+        unselectedIconTheme: IconThemeData(color: scheme.onSurfaceVariant),
       ),
       inputDecorationTheme: fieldDecoration,
       dropdownMenuTheme: DropdownMenuThemeData(

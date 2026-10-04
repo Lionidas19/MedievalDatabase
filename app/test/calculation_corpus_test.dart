@@ -11,13 +11,20 @@ import 'package:price_explorer/services/pricing.dart';
 /// `python tools/validate_calculations.py`; it deliberately contains only
 /// numbers, so this test needs no database, no browser and no WASM.
 ///
-/// Entry 7292 is a known, understood divergence rather than a failure — see
-/// "Validation status" in tools/CALCULATIONS.md. Its measure is spelled
-/// `Garb, Steel [?81 lb?]` in the Measures sheet, with two literal question
-/// marks, so the spreadsheet's own lookup failed and cached zeroes while ours
-/// resolves. It is listed explicitly so that if it ever starts agreeing —
-/// because the source was corrected — this test says so instead of hiding it.
-const _knownDivergentEntries = {7292};
+/// Every entry now agrees, and the one that used to not is worth recording.
+///
+/// Entry 7292 was listed here for months. Its measure is spelled `Garb, Steel
+/// [?81 lb?]` with two literal question marks, and in the August workbook the
+/// spreadsheet's own lookup failed on it: `Total Grams` came through blank,
+/// the valuation count cached as zero and the per-unit figure as `#DIV/0!`,
+/// while our implementation resolved the measure and produced an answer.
+///
+/// In the researcher's current workbook the same row resolves to 36741.00185
+/// and 0.1905, with the spelling unchanged. So the sheet had simply failed to
+/// recalculate that cell, our reading was right all along, and the two now
+/// agree. The list is kept, empty, because this test reports a *recovered*
+/// divergence as loudly as a new one, and that is how this was noticed.
+const _knownDivergentEntries = <int>{};
 
 const _tolerance = 1e-6;
 
@@ -128,12 +135,17 @@ void main() {
   });
 
   test('the proportion with no computable price matches the source', () {
-    // 395 of the 7,800 real entries cache no pence-per-output-Y, almost all
-    // because their quantity resolves to zero. Reproducing that exactly is the
-    // point: the gap is in the historical record, not in the code.
+    // 364 of the 7,800 entries cache no pence-per-output-Y. Reproducing that
+    // exactly is the point: the gap is in the historical record, not in the
+    // code.
+    //
+    // It was 395 against the August workbook. The 31 that gained an answer
+    // are rows the researcher has since filled in or whose measure lookup the
+    // sheet recalculated, 7292 among them. If this number moves again,
+    // something in the source moved; find out what before changing it.
     final noCachedAnswer =
         corpus.where((r) => r['x_per_y'] == null).length;
-    expect(noCachedAnswer, 395);
+    expect(noCachedAnswer, 364);
 
     final weAlsoHaveNoAnswer = corpus.where((r) {
       if (r['x_per_y'] != null) return false;
@@ -151,7 +163,13 @@ void main() {
       return result.pencePerOutputY == null;
     }).length;
 
-    expect(weAlsoHaveNoAnswer, greaterThanOrEqualTo(394),
+    // Stated against the sheet's own count rather than a number typed in
+    // here. The invariant is "we never answer where the source could not",
+    // and writing it as a literal meant it had to be re-typed every time the
+    // source moved, which is exactly when an assertion should be holding
+    // still. It was `394` against a sheet with 395, the one gap being entry
+    // 7292, where the spreadsheet had failed to recalculate and we had not.
+    expect(weAlsoHaveNoAnswer, greaterThanOrEqualTo(noCachedAnswer),
         reason: 'we should decline to answer wherever the spreadsheet did');
   });
 }

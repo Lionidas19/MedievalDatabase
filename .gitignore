@@ -5,8 +5,14 @@
 .DS_Store
 Thumbs.db
 
-# Local assistant notes, not project documentation
-CLAUDE.md
-
 # Python bytecode
 __pycache__/
+
+# The researcher's own material. Not ours to publish, and not needed to run
+# anything: the database in app/data/ is the source of truth, and the ETL that
+# once read this spreadsheet is a one-time import that refuses to rerun.
+# Any of them. This was 'Copy of *.xlsx' and matched only the first export
+# we were sent; the researcher's next workbook arrived called
+# 'Leo2026v 1270s80sDatabase.xlsx' and would have been committed.
+*.xlsx
+*.pdf

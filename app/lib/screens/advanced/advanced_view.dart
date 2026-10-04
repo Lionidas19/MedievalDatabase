@@ -8,8 +8,10 @@ import '../../services/trend.dart';
 import '../../state/app_controller.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
+import '../../widgets/item_label.dart';
 import 'edit_entry_dialog.dart';
 import 'entry_columns.dart';
+import 'entry_details_dialog.dart';
 import 'entry_table.dart';
 import 'filter_bar.dart';
 
@@ -36,6 +38,17 @@ Future<void> openEntryEditor(BuildContext context, PriceEntry entry) async {
     },
   );
   if (updated != null) app.applyEdit(updated);
+}
+
+/// Shows a record read-only, and opens the editor only if asked.
+///
+/// The two are deliberately separate acts: see `entry_details_dialog.dart`.
+Future<void> _readEntry(
+    BuildContext context, PricedEntry priced, String unitName) async {
+  final wantsEdit =
+      await showEntryDetails(context, priced: priced, unitName: unitName);
+  if (!wantsEdit || !context.mounted) return;
+  await openEntryEditor(context, priced.entry);
 }
 
 /// Identifies one filtered, priced, sorted and grouped result.
@@ -192,6 +205,10 @@ class _AdvancedViewState extends State<AdvancedView> {
     );
     if (key == _cacheKey) return _cached;
 
+    // Built once per pass, not per entry: it reads two tables and the loop
+    // below runs 7,800 times.
+    final modern = app.repository.modernPoundsPerPenny;
+
     final priced = <PricedEntry>[];
     for (final e in app.entries) {
       if (!_filters.matches(e)) continue;
@@ -199,11 +216,23 @@ class _AdvancedViewState extends State<AdvancedView> {
       // source will produce and nobody should trust. Compute it, then withhold
       // it, so the row can still explain itself.
       final comparable = e.canBePricedPer(_outputUnit);
-      final calc = e.calculate(outputY: _outputUnit);
+      final calc = e.calculate(
+        outputY: _outputUnit,
+        // One lookup per entry against a map built once; see
+        // DatabaseRepository.modernPoundsPerPenny. Null for a year with no
+        // factor, which yields dashes rather than invented pounds.
+        modernPoundsPerPenny: modern[e.year],
+      );
+      // Against its own valuation measure the answer is the recorded price
+      // itself: the source already says what one of them cost. No conversion,
+      // so no way for it to come back empty.
+      final recorded = _outputUnit?.isRecordedUnit ?? false;
       priced.add(PricedEntry(
         entry: e,
         calc: calc,
-        perUnit: comparable ? calc.pencePerOutputY : null,
+        perUnit: recorded
+            ? calc.priceInPence
+            : (comparable ? calc.pencePerOutputY : null),
         comparable: comparable,
       ));
     }
@@ -364,15 +393,23 @@ class _AdvancedViewState extends State<AdvancedView> {
             years: RangeValues(minYear.toDouble(), maxYear.toDouble()))
         : _filters;
 
-    final outputUnits = repo.outputUnitChoices;
+    // The recorded unit leads the list: it is the default, and it is where a
+    // reader who has narrowed themselves into an unanswerable question comes
+    // back to.
+    final outputUnits = [MetricItem.recordedUnit, ...repo.outputUnitChoices];
     _outputUnit ??= _defaultOutputUnit(outputUnits);
 
     final size = MediaQuery.sizeOf(context);
     final compact = Breakpoints.isCompact(size.width);
     final short = Breakpoints.isShort(size.height);
     final narrow = Breakpoints.isNarrow(size.width);
-    final unitName = _outputUnit?.name ?? 'unit';
-    final columns = columnsFor(prefs.detailLevel, unitName);
+    final unitName = _outputUnit?.isRecordedUnit ?? false
+        ? 'recorded unit'
+        : _outputUnit?.name ?? 'unit';
+    // Null where the database carries no conversion factors, which hides the
+    // modern-money columns rather than showing a column of dashes.
+    final columns = columnsFor(prefs.detailLevel, unitName,
+        modernYear: app.repository.modernMoneyYear);
 
     // The sorted column can vanish when the detail level narrows — sort by
     // Workers, drop to Basics, and there is nothing left to sort by.
@@ -402,6 +439,7 @@ class _AdvancedViewState extends State<AdvancedView> {
           undatedTotal: app.entries.where((e) => e.year == null).length,
           estimating: _estimating,
           onEstimatingChanged: (v) => setState(() => _estimating = v),
+          onReset: () => _resetEverything(prefs, minYear, maxYear),
           estimateCount: _estimateCount,
           dense: short,
           stats: _stats,
@@ -431,6 +469,7 @@ class _AdvancedViewState extends State<AdvancedView> {
                       ascending: _ascending,
                       onSort: _toggleSort,
                       onOpen: (e) => openEntryEditor(context, e),
+                      onRead: (p) => _readEntry(context, p, unitName),
                       unitName: unitName,
                       showGroupHeaders: prefs.groupBy != GroupBy.none,
                     ),
@@ -439,15 +478,33 @@ class _AdvancedViewState extends State<AdvancedView> {
     );
   }
 
-  MetricItem? _defaultOutputUnit(List<MetricItem> units) {
-    if (units.isEmpty) return null;
-    for (final name in ['Kilograms', 'Grams', 'Litres']) {
-      for (final u in units) {
-        if (u.name == name) return u;
-      }
-    }
-    return units.first;
+  /// Everything about the question, back to how the page opens.
+  ///
+  /// The filters, the unit, the sort, the grouping and the estimates: all of
+  /// it, in one press. Deliberately not the theme, the palette or the detail
+  /// level, which are how the reader likes to be shown things rather than
+  /// what they asked.
+  void _resetEverything(ViewPreferences prefs, int minYear, int maxYear) {
+    setState(() {
+      _filters = FilterState(
+        years: RangeValues(minYear.toDouble(), maxYear.toDouble()),
+      );
+      _outputUnit = MetricItem.recordedUnit;
+      _sortColumnId = 'year';
+      _ascending = true;
+      _estimating = false;
+    });
+    prefs.groupBy = GroupBy.none;
   }
+
+  /// What the table opens on.
+  ///
+  /// Kilograms until testing showed the cost of it: a reader who changed the
+  /// unit and got nothing back could not tell whether the app was broken or
+  /// the question was unanswerable, and had no way to return. Pricing each
+  /// entry by the measure the source itself used cannot come back empty.
+  MetricItem _defaultOutputUnit(List<MetricItem> units) =>
+      MetricItem.recordedUnit;
 }
 
 /// What the table shows when every row has been filtered away.
@@ -581,11 +638,20 @@ class _EntryCard extends StatelessWidget {
 
     return Card(
       child: ListTile(
-        title: Text('${e.categoryLabel} — ${e.priceLabel}'),
+        // Same emphasis as the table: the specific carries the weight,
+        // and the price it fetched sits beside it.
+        title: Row(
+          children: [
+            Flexible(child: ItemLabel(entry: e)),
+            Text(' — ${e.priceLabel}'),
+          ],
+        ),
         subtitle: Text(lines.join('\n')),
         isThreeLine: lines.length > 2,
         trailing: const Icon(Icons.chevron_right),
-        onTap: () => openEntryEditor(context, e),
+        // Reading, like a row in the table. The cards are the phone
+        // layout, where a stray tap is likeliest of all.
+        onTap: () => _readEntry(context, priced, unitName),
       ),
     );
   }

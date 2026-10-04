@@ -44,8 +44,7 @@ or as little as you want. See [How much to show](#how-much-to-show).
 ## Layout
 
 ```
-Copy of 1270s80sDatabase.xlsx    the source spreadsheet the first import came from
-tools/build_normalized_db.py     the original import from it, run once
+tools/build_normalized_db.py     the original import from the source spreadsheet
 tools/check_incoming_db.py       reviews an updated database before it is published
 tools/migrate.py                 applies numbered schema changes to a database
 tools/CALCULATIONS.md            how the spreadsheet's formulas work
@@ -57,6 +56,7 @@ tools/build_review_db.py         builds the questions file for the researcher
 app/                             the Flutter viewer/editor app
 app/data/                        the database the app ships with — the source of truth
 docs/                            screenshots used by this README
+CLAUDE.md                        why the code is the way it is
 review/                          questions awaiting the researcher's answers
 ```
 

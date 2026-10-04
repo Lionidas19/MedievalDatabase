@@ -670,7 +670,7 @@ class _RecordedDate extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final julian = parseRecordedDate(year, periodName, day);
     final text = julian == null
-        ? ladyDayCaveat
+        ? michaelmasCaveat
         : showGregorian
             ? '$julian in the Julian calendar the accounts use, which is '
                 '${julianToGregorian(julian)} by modern reckoning.'

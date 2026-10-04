@@ -76,8 +76,38 @@ void main() {
       // every entry rather than the hundred-odd with a full date. Until the
       // researcher says which convention the source uses, the app must not
       // adjust years behind the reader's back.
-      expect(ladyDayCaveat, contains('25 March'));
-      expect(ladyDayCaveat, contains('not been adjusted'));
+      // Michaelmas, not Lady Day: these figures come off account rolls,
+      // whose year turned on 29 September. The researcher corrected this,
+      // and the wrong date must not creep back.
+      expect(michaelmasCaveat, contains('Michaelmas'));
+      expect(michaelmasCaveat, contains('29 September'));
+      // A range, not a date: the same feast is 11 October by modern
+      // reckoning, and a single date would be false precision.
+      // 6 October, not 11 or 13: the calendars are seven days apart for
+      // every year this database covers. An earlier draft said 11, from a
+      // figure in the researcher's notes that doubled the gap.
+      expect(michaelmasCaveat, contains('6 October'));
+      expect(michaelmasCaveat, isNot(contains('11 October')));
+      expect(michaelmasCaveat, isNot(contains('25 March')));
+      expect(michaelmasCaveat, contains('not been adjusted'));
+    });
+  });
+
+  group('Michaelmas across the covered years', () {
+    test('29 September is 6 October throughout 1270-1291', () {
+      for (var year = 1270; year <= 1291; year++) {
+        final gregorian = julianToGregorian(CalendarDate(year, 9, 29));
+        expect(gregorian.month, 10, reason: 'year $year');
+        expect(gregorian.day, 6, reason: 'year $year');
+      }
+    });
+
+    test('the gap widens at century boundaries, not within our period', () {
+      // Seven days through the 1200s, eight from 1300. Nothing hard-codes
+      // this; it falls out of the Julian Day Number conversion.
+      expect(julianToGregorian(CalendarDate(1299, 9, 29)).day, 6);
+      expect(julianToGregorian(CalendarDate(1300, 9, 29)).day, 7);
+      expect(julianToGregorian(CalendarDate(1400, 9, 29)).day, 8);
     });
   });
 }

@@ -78,6 +78,9 @@ class PriceCalculation {
     required this.outputYQuantity,
     required this.pencePerOutputY,
     required this.unresolvedMeasures,
+    this.modernTotalSale,
+    this.modernPerValuationMeasure,
+    this.modernPerOutputY,
   });
 
   /// Sheet column V, "Total Grams" — a misnomer inherited from the source.
@@ -113,6 +116,19 @@ class PriceCalculation {
   /// surfacing rather than hiding.
   final int unresolvedMeasures;
 
+  /// The three pence figures again, in the money of the year being reported
+  /// in. Null wherever there is no factor for the entry's year, or no pence
+  /// figure to convert.
+  ///
+  /// These are the brief's `UKP 2026 Total Sale`, `UKP 2026 per Val Meas` and
+  /// `UKP 2026 per Y`. They are computed here rather than stored, for the
+  /// same reason `pencePerOutputY` is: the last of the three depends on the
+  /// unit the reader picked, so it cannot be a column. The researcher's
+  /// workbook does keep them as columns; that is the workbook's business.
+  final double? modernTotalSale;
+  final double? modernPerValuationMeasure;
+  final double? modernPerOutputY;
+
   bool get hasPricePerOutput => pencePerOutputY != null;
 }
 
@@ -122,6 +138,12 @@ class PriceCalculation {
 /// brief describes it as "the dropdown menu that gets altered" to ask what a
 /// price is in modern kilograms or historic ounces. Pass the entry's own
 /// stored default when the reader has not chosen.
+/// [modernPoundsPerPenny] turns the three pence figures into money a reader
+/// alive today has a feel for. It is one number: what a single penny of this
+/// entry's year is worth in the pounds being reported in, the year's own
+/// factor already carried forward by the rebasing multiplier. Null wherever
+/// the reference data cannot say, which yields null answers rather than
+/// zeroes.
 PriceCalculation calculatePrice({
   required List<MeasuredQuantity> quantities,
   required RecordedPrice price,
@@ -129,6 +151,7 @@ PriceCalculation calculatePrice({
   double? multiplierWorkers,
   double? outputXMetric,
   double? outputYMetric,
+  double? modernPoundsPerPenny,
 }) {
   var totalMetric = 0.0;
   var unresolved = 0;
@@ -148,6 +171,7 @@ PriceCalculation calculatePrice({
       : priceInPence * valuationCount * (multiplierWorkers ?? 1);
 
   final outputYQuantity = _divide(totalMetric, outputYMetric);
+  final pencePerOutputY = _divide(totalSaleInPence, outputYQuantity);
 
   return PriceCalculation(
     totalMetric: totalMetric,
@@ -157,10 +181,24 @@ PriceCalculation calculatePrice({
     totalSaleInPence: totalSaleInPence,
     outputXValue: _divide(totalMetric, outputXMetric),
     outputYQuantity: outputYQuantity,
-    pencePerOutputY: _divide(totalSaleInPence, outputYQuantity),
+    pencePerOutputY: pencePerOutputY,
     unresolvedMeasures: unresolved,
+    // Pence are converted, never the other way about. Each of these is the
+    // figure directly above it in modern money, so a reader comparing them is
+    // comparing the same thing twice rather than two different sums.
+    modernTotalSale: _modern(totalSaleInPence, modernPoundsPerPenny),
+    modernPerValuationMeasure: _modern(priceInPence, modernPoundsPerPenny),
+    modernPerOutputY: _modern(pencePerOutputY, modernPoundsPerPenny),
   );
 }
+
+/// Pence of the entry's year into pounds of the year being reported in.
+///
+/// Null in, null out, and null for a missing factor: a modern figure that
+/// looks real and rests on no conversion is worse than a blank, which is the
+/// same rule the rest of this file follows.
+double? _modern(double? pence, double? poundsPerPenny) =>
+    pence == null || poundsPerPenny == null ? null : pence * poundsPerPenny;
 
 /// Formats a pence figure for display, keeping small values readable without
 /// implying more precision than the source has.

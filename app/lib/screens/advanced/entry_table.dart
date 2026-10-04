@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/models.dart';
 import '../../services/pricing.dart';
 import '../../theme.dart';
+import '../../widgets/item_label.dart';
 import 'entry_columns.dart';
 
 /// A run of entries under one heading.
@@ -42,6 +43,7 @@ class EntryTable extends StatefulWidget {
     required this.ascending,
     required this.onSort,
     required this.onOpen,
+    required this.onRead,
     required this.unitName,
     required this.showGroupHeaders,
   });
@@ -54,6 +56,9 @@ class EntryTable extends StatefulWidget {
   final bool ascending;
   final ValueChanged<EntryColumn> onSort;
   final ValueChanged<PriceEntry> onOpen;
+
+  /// Opening a record to *read* it. Separate from [onOpen], which edits.
+  final ValueChanged<PricedEntry> onRead;
   final String unitName;
   final bool showGroupHeaders;
 
@@ -136,6 +141,12 @@ class _EntryTableState extends State<EntryTable> {
                   Expanded(
                     child: Scrollbar(
                       controller: _vertical,
+                      // Explicit, like its horizontal sibling. Without it the
+                      // bar shows only while the list is actually moving, so
+                      // the one state it never appears in is the state a
+                      // reader needs it in: stopped, wondering whether there
+                      // is more below.
+                      thumbVisibility: true,
                       child: CustomScrollView(
                         controller: _vertical,
                         slivers: [
@@ -183,6 +194,7 @@ class _EntryTableState extends State<EntryTable> {
             widths: widths,
             actionsWidth: _actionsWidth,
             onOpen: widget.onOpen,
+            onRead: widget.onRead,
             // Banded within the group, so a heading always restarts the
             // pattern rather than inheriting whatever parity it landed on.
             shaded: i.isOdd,
@@ -464,6 +476,7 @@ class _EntryRow extends StatelessWidget {
     required this.widths,
     required this.actionsWidth,
     required this.onOpen,
+    required this.onRead,
     required this.shaded,
   });
 
@@ -477,6 +490,7 @@ class _EntryRow extends StatelessWidget {
   /// between rows does — which is why that rule is gone.
   final bool shaded;
   final ValueChanged<PriceEntry> onOpen;
+  final ValueChanged<PricedEntry> onRead;
 
   @override
   Widget build(BuildContext context) {
@@ -486,7 +500,10 @@ class _EntryRow extends StatelessWidget {
     return Material(
       color: shaded ? scheme.surfaceContainerLow : scheme.surface,
       child: InkWell(
-        onTap: () => onOpen(priced.entry),
+        // Reading, not editing. A tap is what somebody does to look closer,
+        // and sending it to the editor meant readers changed records they
+        // only meant to inspect — and scrolling by tapping did it too.
+        onTap: () => onRead(priced),
         child: Row(
           children: [
             for (final (i, column) in columns.indexed)
@@ -509,6 +526,8 @@ class _EntryRow extends StatelessWidget {
               child: IconButton(
                 icon: const Icon(Icons.edit_outlined, size: 18),
                 tooltip: 'Edit this entry',
+                // The pencil stays a direct route: clicking it says what it
+                // means, which a tap on the row does not.
                 onPressed: () => onOpen(priced.entry),
               ),
             ),
@@ -592,17 +611,23 @@ class _Cell extends StatelessWidget {
         alignment: column.numeric
             ? Alignment.centerRight
             : Alignment.centerLeft,
-        child: Text(
-          text,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          textAlign: column.numeric ? TextAlign.right : TextAlign.left,
-          style: style?.copyWith(
-            color: absent || estimated ? mutedColor : null,
-            fontStyle: estimated ? FontStyle.italic : null,
-            fontFeatures: column.numeric ? const [tabularFigures] : null,
-          ),
-        ),
+        // The item column is the one place a cell is not a flat string: the
+        // specific carries the weight and its category path recedes. It is
+        // what the row is about, and a reader should lock onto it.
+        child: column.id == 'item'
+            ? ItemLabel(entry: priced.entry, style: style)
+            : Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: column.numeric ? TextAlign.right : TextAlign.left,
+                style: style?.copyWith(
+                  color: absent || estimated ? mutedColor : null,
+                  fontStyle: estimated ? FontStyle.italic : null,
+                  fontFeatures:
+                      column.numeric ? const [tabularFigures] : null,
+                ),
+              ),
       ),
     );
 

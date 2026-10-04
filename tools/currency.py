@@ -10,14 +10,26 @@ and describes the tab itself as: "Dear database. Please translate this
 medieval price to 2017 UK pricing, and then apply inflation to get us to early
 2026. Will need updating because... you know... inflation."
 
-**The Currency sheet in the workbook is empty.** Not sparse — its dimension is
-`A1:A1` and it holds no cells at all, in the cached values and in the formula
-text alike. There are no UKP columns on the Data sheet either. The brief is
-describing something the researcher intended, not something they built.
+The sheet was empty in the August export, so this module was first written
+against the *stated contract* below rather than against real data. The
+researcher has since supplied a filled tab, laid out differently, and both
+layouts are now read.
 
-So this module cannot be written against real data, and is deliberately
-written against a *stated contract* instead. The layout asked for in
-`review/`, and the one this reads, is:
+**What the real tab looks like**, 1270 to 1519, one flat value per decade:
+
+    Year   Function Value   UKP 2026   UKP 2017   Pence
+    1270   4.086976         4.086976   3.04       1
+
+Only two of those five columns carry information. `Function Value` duplicates
+`UKP 2026` on every row and `Pence` is 1 throughout, meaning the figures are
+per one penny. A `UKP <year>` pair is read as base and target: the earlier
+year is the per-year factor and the ratio between them is the rebasing
+multiplier, which in the supplied tab is a constant 1.3444 across all 250
+rows. Storing it that way rather than storing the 2026 column keeps one number
+to change when inflation moves, which is the whole reason the two steps are
+separate.
+
+**The contract layout**, still accepted, is:
 
     A1: Year   B1: Pounds per penny   C1: Basis   D1: Source   E1: Note
     A2: 1270   B2: 0.0000            ...
@@ -42,6 +54,7 @@ Self-test:
 
     python tools/currency.py
 """
+import re
 from dataclasses import dataclass, field
 
 
@@ -93,6 +106,15 @@ _FACTOR = {
 _BASIS = {"basis", "index", "measure", "series", "method"}
 _SOURCE = {"source", "citation", "reference", "authority"}
 _NOTE = {"note", "notes", "comment", "comments", "remark", "remarks"}
+
+# A column headed with a currency and a year, such as "UKP 2017" or
+# "GBP 2026": the value of one penny expressed in that year's pounds. Two of
+# them make a base and a target between them.
+_DATED_MONEY = re.compile(r"^(?:ukp|gbp|usd|pounds?|p)(\d{4})$")
+
+# How many pence the figures are quoted per. Always 1 in the supplied tab, but
+# a 12 here would silently turn every factor into pounds per shilling.
+_PER = {"pence", "pennies", "perpence", "pencecount", "d"}
 
 _BASE_YEAR = {"baseyear", "basisyear", "expressedin", "poundsofyear"}
 _TARGET_YEAR = {"targetyear", "reportyear", "reportingyear", "presentyear"}
@@ -165,8 +187,12 @@ def parse(rows):
     result = CurrencySheet()
 
     header_row, cols = None, {}
+    dated = {}          # year -> column index, from "UKP 2017" style headers
+    per_pence_col = None
     for number, values in rows:
         found = {}
+        here_dated = {}
+        here_per = None
         for i, cell in enumerate(values):
             key = _norm(cell)
             for name, vocabulary in (("year", _YEAR), ("factor", _FACTOR),
@@ -174,10 +200,21 @@ def parse(rows):
                                      ("note", _NOTE)):
                 if key in vocabulary and name not in found:
                     found[name] = i
+            match = _DATED_MONEY.match(key)
+            if match:
+                here_dated.setdefault(int(match.group(1)), i)
+            elif key in _PER and here_per is None:
+                here_per = i
+        # Two dated-money columns stand in for an explicit factor column: the
+        # earlier year is the factor and the later one is where the rebasing
+        # multiplier is read from.
+        if "year" in found and "factor" not in found and len(here_dated) >= 1:
+            found["factor"] = here_dated[min(here_dated)]
         # A year column on its own is not enough — the Data sheet has years
         # too, and a header row without a factor column tells us nothing.
         if "year" in found and "factor" in found:
             header_row, cols = number, found
+            dated, per_pence_col = here_dated, here_per
             break
 
     result.header_row = header_row
@@ -202,6 +239,47 @@ def parse(rows):
                 note=_text(cell("note")),
             ))
 
+    # Two dated-money columns imply the rebasing without anybody labelling
+    # it: the ratio between them *is* the multiplier. Checked across every row
+    # rather than taken from the first, because a column of pasted values can
+    # disagree with itself and nothing else would notice.
+    derived = None
+    if len(dated) >= 2 and header_row is not None:
+        base_year, target_year = min(dated), max(dated)
+        ratios = set()
+        for number, values in rows:
+            if number <= header_row:
+                continue
+            b = _num(values[dated[base_year]]
+                     if len(values) > dated[base_year] else None)
+            t = _num(values[dated[target_year]]
+                     if len(values) > dated[target_year] else None)
+            if b in (None, 0) or t is None:
+                continue
+            ratios.add(round(t / b, 9))
+        if len(ratios) == 1:
+            derived = Rebasing(
+                base_year=base_year, target_year=target_year,
+                multiplier=ratios.pop(),
+                note=f"derived from the UKP {target_year} and UKP "
+                     f"{base_year} columns, consistent on every row")
+        elif ratios:
+            result.problems.append(
+                f"UKP {target_year} is not a constant multiple of UKP "
+                f"{base_year}: {len(ratios)} different ratios across the "
+                "sheet, so no single rebasing multiplier can be read")
+
+    # The figures are per one penny. Anything else silently rescales them.
+    if per_pence_col is not None and header_row is not None:
+        per = {_num(values[per_pence_col])
+               for number, values in rows
+               if number > header_row and len(values) > per_pence_col
+               and _num(values[per_pence_col]) is not None}
+        if per and per != {1.0}:
+            result.problems.append(
+                "the Pence column is not 1 throughout (%s), so the factors "
+                "are not per penny" % ", ".join(str(x) for x in sorted(per)))
+
     # The rebasing labels can sit anywhere, above or below the table.
     rebasing = Rebasing()
     for _, values in rows:
@@ -214,6 +292,9 @@ def parse(rows):
     if (rebasing.base_year or rebasing.target_year
             or rebasing.multiplier is not None):
         result.rebasing = rebasing
+    elif derived is not None:
+        # Labelled cells win where they exist; this is the fallback.
+        result.rebasing = derived
 
     # --- what could not be read ------------------------------------------
     if header_row is None:
@@ -306,6 +387,44 @@ def _self_test():
 
     # A year column with no factor column is not a header row.
     assert parse([(1, ("Year", "Comments")), (2, (1270, "x"))]).header_row is None
+
+    # The layout the researcher actually supplied: no labelled multiplier
+    # anywhere, two dated-money columns, and a Pence column of 1s.
+    real = parse([
+        (1, ("Year", "Function Value", "UKP 2026", "UKP 2017", "Pence")),
+        (2, (1270, 4.086976, 4.086976, 3.04, 1)),
+        (3, (1271, 4.086976, 4.086976, 3.04, 1)),
+        (4, (1280, 3.885316, 3.885316, 2.89, 1)),
+    ])
+    assert real.header_row == 1, real
+    # The factor is the BASE year's column, not the target's: the multiplier
+    # is kept separate so one edit updates every year.
+    assert [f.year for f in real.factors] == [1270, 1271, 1280]
+    assert real.factors[0].pounds_per_penny == 3.04
+    assert real.rebasing.base_year == 2017
+    assert real.rebasing.target_year == 2026
+    assert abs(real.rebasing.multiplier - 1.3444) < 1e-9, real.rebasing
+    assert real.rebasing.is_usable
+    assert not real.problems, real.problems
+    # And the round trip lands on the sheet's own 2026 column.
+    assert abs(convert(1, 1270, {f.year: f for f in real.factors},
+                       real.rebasing) - 4.086976) < 1e-9
+
+    # A target column that is not a constant multiple cannot yield one
+    # multiplier, and says so rather than picking the first row's.
+    ragged = parse([
+        (1, ("Year", "UKP 2026", "UKP 2017")),
+        (2, (1270, 4.0, 2.0)),
+        (3, (1271, 9.0, 3.0)),
+    ])
+    assert any("not a constant multiple" in p for p in ragged.problems), ragged
+
+    # Pence of 12 would mean the factors are per shilling, not per penny.
+    shillings = parse([
+        (1, ("Year", "UKP 2026", "UKP 2017", "Pence")),
+        (2, (1270, 4.086976, 3.04, 12)),
+    ])
+    assert any("not per penny" in p for p in shillings.problems), shillings
 
     factors = {f.year: f for f in sheet.factors}
     assert convert(240, 1270, factors, sheet.rebasing) == 240 * 0.0042 * 1.34

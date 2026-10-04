@@ -128,6 +128,17 @@ String _dash(Object? v) {
   return s.isEmpty ? '—' : s;
 }
 
+/// A money figure, rounded to the penny and never beyond.
+///
+/// The conversion rests on a factor quoted to two decimals, so printing
+/// 212.52275 would be claiming a precision the reference data does not have.
+/// Figures in the thousands drop the pence entirely, where they are noise.
+String _pounds(double? value) {
+  if (value == null) return '\u2014';
+  if (value.abs() >= 1000) return '\u00a3${value.round()}';
+  return '\u00a3${value.toStringAsFixed(2)}';
+}
+
 String _num(double? v) => v == null ? '—' : formatPence(v);
 
 /// The column set for [level], pricing against a unit named [unitName].
@@ -137,7 +148,12 @@ String _num(double? v) => v == null ? '—' : formatPence(v);
 /// works out to, how the figure was reached, what else the record says, and
 /// where it came from. [EntryColumn.startsGroup] marks each of those turns, so
 /// the table can draw the seam.
-List<EntryColumn> columnsFor(DetailLevel level, String unitName) {
+/// [modernYear] labels the modern-money columns, e.g. 2026, and null hides
+/// them. Null is the honest state when the database has no conversion
+/// factors: a column of dashes headed "In 2026 money" tells a reader the app
+/// is broken, when in fact nobody has supplied the figures.
+List<EntryColumn> columnsFor(DetailLevel level, String unitName,
+    {int? modernYear}) {
   final detailed = level.atLeastDetailed;
   final everything = level.isEverything;
 
@@ -219,6 +235,34 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName) {
           'think of an hourly wage rather than a pay slip.',
       value: (p) => p.entry.priceLabel,
     ),
+
+    // Beside the recorded price, at every detail level, because this is the
+    // one figure a lay reader can feel. Testing found people reading "4s 4d"
+    // with no sense of whether it was a lot; the researcher asked for a
+    // modern equivalent they could see "with no effort", and effort is
+    // exactly what switching detail level is.
+    if (modernYear != null)
+      EntryColumn(
+        id: 'modernPrice',
+        label: 'In $modernYear money',
+        sortKey: (p) => p.calc.modernPerValuationMeasure,
+        width: 168,
+        numeric: true,
+        explanation:
+            'The recorded price in today\'s pounds: what one of whatever the '
+            'source measured this by would cost now. Worked out from the '
+            'penny value of the entry\'s own year and then carried forward '
+            'for inflation, so it moves with the year of the record and not '
+            'just with the price. It is a guide to scale, not a valuation: '
+            'what a penny bought in 1270 is a question with more than one '
+            'defensible answer.',
+        value: (p) => _pounds(p.calc.modernPerValuationMeasure),
+        cellTooltip: (p) => p.calc.modernPerValuationMeasure != null
+            ? null
+            : p.entry.year == null
+                ? 'No year on this entry, so there is no factor to convert by.'
+                : 'No conversion factor for ${p.entry.year}.',
+      ),
     if (everything)
       EntryColumn(
         id: 'priceInPence',
@@ -240,20 +284,49 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName) {
       width: 190,
       numeric: true,
       startsGroup: true,
-      explanation:
-          'The headline figure: pence per $unitName, worked out for '
-          'this entry rather than stored. Choose a different unit with '
-          '"Price per" above the table. A figure shown as "~ 0.19" is an '
-          'estimate from neighbouring years, never a record.',
+      explanation: unitName == 'recorded unit'
+          ? 'What one of whatever the source measured this by actually cost. '
+              'Each row is priced by its own measure, named in the tooltip on '
+              'the figure, so every entry with a price has an answer here. '
+              'Because the measures differ from row to row, pick a single '
+              'unit at "Price per" before comparing one row against another.'
+          : 'The headline figure: pence per $unitName, worked out for '
+              'this entry rather than stored. Choose a different unit with '
+              '"Price per" above the table. A figure shown as "~ 0.19" is an '
+              'estimate from neighbouring years, never a record.',
       value: (p) => p.perUnit != null
           ? _num(p.perUnit)
           : p.estimate != null
           ? '~ ${formatPence(p.estimate!.value)}'
           : '—',
-      cellTooltip: (p) => p.estimate != null
-          ? p.estimate!.explain(unitName, p.entry.year ?? 0)
-          : missingPerUnitReason(p, unitName),
+      cellTooltip: (p) {
+        if (p.estimate != null) {
+          return p.estimate!.explain(unitName, p.entry.year ?? 0);
+        }
+        // Priced by its own measure, the figure means nothing without
+        // saying which measure that was.
+        if (unitName == 'recorded unit' && p.perUnit != null) {
+          final measure = p.entry.valuationMeasure?.name;
+          return measure == null
+              ? 'Per whatever the source measured this by.'
+              : 'Pence per $measure, the measure this entry was priced by.';
+        }
+        return missingPerUnitReason(p, unitName);
+      },
     ),
+    if (everything && modernYear != null)
+      EntryColumn(
+        id: 'modernPerUnit',
+        label: 'In $modernYear money per $unitName',
+        sortKey: (p) => p.calc.modernPerOutputY,
+        width: 230,
+        numeric: true,
+        explanation:
+            'Pence per $unitName, converted to today\'s pounds. The same '
+            'caution applies as to the other modern figure: it shows scale, '
+            'not a valuation.',
+        value: (p) => _pounds(p.calc.modernPerOutputY),
+      ),
     if (everything)
       EntryColumn(
         id: 'totalSale',

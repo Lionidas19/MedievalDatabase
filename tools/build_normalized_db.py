@@ -36,19 +36,18 @@ import dimensions
 
 # Paths are relative to the repo root (this script lives in tools/).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(_REPO_ROOT, "Copy of 1270s80sDatabase.xlsx")
+SRC = os.path.join(_REPO_ROOT, "Leo2026v 1270s80sDatabase.xlsx")
 OUT = os.path.join(_REPO_ROOT, "app", "data", "1270s80sDatabase_normalized.sqlite")
 
-# Last populated row of each sheet.
+# Last populated row of each sheet. Each is the last row whose key column
+# holds anything; everything below is notes or blank.
 PLACES_LAST_ROW = 711
-CATEGORIES_LAST_ROW = 592
-MEASURES_LAST_ROW = 492
-STANDARDS_LAST_ROW = 99
+CATEGORIES_LAST_ROW = 626
+MEASURES_LAST_ROW = 531
+STANDARDS_LAST_ROW = 100
 DATA_FIRST_ROW = 3
 DATA_LAST_ROW = 10381
-# The Currency sheet is empty, so there is no populated last row to record.
-# This is simply how far down to look for a header once somebody fills it in.
-CURRENCY_LAST_ROW = 200
+CURRENCY_LAST_ROW = 251
 
 def refuse_if_it_holds_work(path):
     """Stops a rebuild from destroying entries the spreadsheet cannot restore.
@@ -691,6 +690,17 @@ for _r, values in rows_of("Categories", 2, CATEGORIES_LAST_ROW):
 conn.commit()
 
 # ---------------------------------------------------------- price_entries ---
+# Keys are this script's own names, kept stable so the code below does not
+# move every time a heading is reworded. The numbers are 1-based columns on
+# the Data sheet, and EXPECTED_HEADERS alongside is what each one must
+# actually be called.
+#
+# These numbers changed wholesale between the August export and Leo2026v:
+# three UKP columns were inserted in the middle and the calculation columns
+# were reordered around them, so column 24 went from OUTPUT X to Val Meas in
+# Grams. Reading the new sheet with the old map produced a database that
+# looked entirely plausible and was wrong in every derived figure. That is
+# what the assertion below exists to stop.
 COL = {
     "Entry": 1, "Year": 2, "Region": 3, "Month": 4, "Day": 5,
     "Category": 6, "Subcategory": 7, "Specifics": 8,
@@ -698,11 +708,70 @@ COL = {
     "Pounds": 13, "Shillings": 14, "Pence": 15, "Status/Info": 16, "Food": 17,
     "MEASURE 1": 18, "MEASURE 2": 19, "MEASURE 3": 20,
     "Multiplier/Workers Measure": 21, "Total Grams": 22,
-    "Valuation Measure": 23, "OUTPUT X": 24, "CHOSEN OUTPUT Y": 25,
-    "OUTPUT X VALUE": 26, "Val Grams": 27, "Sales Calc": 28,
-    "Price in Pence": 29, "Total Sale in Pence": 30, "Pence per Output Y": 31,
-    "Country": 32, "Coin type": 33, "Information": 34, "Source": 35, "Page": 36,
+    "Valuation Measure": 23, "OUTPUT X": 26, "CHOSEN OUTPUT Y": 27,
+    "OUTPUT X VALUE": 28, "Val Grams": 24, "Sales Calc": 25,
+    "Price in Pence": 30, "Total Sale in Pence": 29, "Pence per Output Y": 31,
+    "Country": 35, "Coin type": 36, "Information": 37, "Source": 38,
+    "Page": 39,
 }
+
+# What the Data sheet must call each of those columns. The heading text is
+# matched loosely (case, spacing and punctuation ignored) because wording
+# drifts and that is harmless; the *position* is what must not drift.
+EXPECTED_HEADERS = {
+    "Entry": "Entry", "Year": "Year", "Region": "Settlement Name",
+    "Month": "Month", "Day": "Day", "Category": "Category",
+    "Subcategory": "Subcategory", "Specifics": "Specifics",
+    "UNIT 1": "Unit 1", "UNIT 2": "Unit 2", "UNIT 3": "Unit 3",
+    "Multiplier/Workers": "Multiplier Workers",
+    "Pounds": "Pounds H", "Shillings": "Shillings H", "Pence": "Pence H",
+    "Status/Info": "Status Info", "Food": "Food Payment",
+    "MEASURE 1": "Measure 1", "MEASURE 2": "Measure 2",
+    "MEASURE 3": "Measure 3",
+    "Multiplier/Workers Measure": "Multiplier Workers Measure",
+    "Total Grams": "Total Grams", "Valuation Measure": "Valuation Measure",
+    "OUTPUT X": "Function Output X", "CHOSEN OUTPUT Y": "User Output Y",
+    "OUTPUT X VALUE": "Output X Value", "Val Grams": "Val Meas in Grams",
+    "Sales Calc": "Val Meas Number",
+    "Price in Pence": "Val Meas Price per Numb in Pence",
+    "Total Sale in Pence": "Total Sale in Pence",
+    "Pence per Output Y": "Pence per Output Y",
+    "Country": "Country", "Coin type": "Coin Type",
+    "Information": "Information", "Source": "Source", "Page": "Page",
+}
+
+
+def _loose(text):
+    return "".join(ch for ch in str(text or "").lower() if ch.isalnum())
+
+
+def check_data_headers():
+    """Refuses to import a Data sheet whose columns have moved.
+
+    Without this the script reads by position and says nothing when the
+    positions change, which is the single most dangerous way for an importer
+    to fail: every row loads, every count matches, and every derived figure
+    is quietly taken from the wrong column.
+    """
+    header = next(iter(rows_of("Data", 1, 1)))[1]
+    wrong = []
+    for name, column in COL.items():
+        actual = at(header, column)
+        expected = EXPECTED_HEADERS[name]
+        if _loose(actual) != _loose(expected):
+            wrong.append((column, expected, actual))
+    if wrong:
+        lines = "\n".join(
+            "    column %-3s expected %-34r found %r" % w for w in wrong)
+        raise SystemExit(
+            "The Data sheet's columns are not where this importer expects "
+            "them.\n\n%s\n\n"
+            "Update COL and EXPECTED_HEADERS together, then rerun. Do not "
+            "simply widen the check: reading the wrong column produces a "
+            "database that looks right and is not." % lines)
+
+
+check_data_headers()
 
 # Derived column -> the name it gets in excel_cached_calculations.
 CACHED = [
