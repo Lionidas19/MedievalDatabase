@@ -70,7 +70,17 @@ jobs:
       - name: Disable Jekyll
         run: touch app/build/web/.nojekyll
 
+      # enablement: true turns Pages on via the API rather than needing
+      # somebody to click Settings -> Pages -> Source -> GitHub Actions.
+      #
+      # Without it this step fails with "Get Pages site failed ... verify that
+      # the repository has Pages enabled", which has now happened twice: once
+      # before Pages was ever switched on, and again after the repository was
+      # made private and public again, which silently cleared the setting. The
+      # workflow already holds `pages: write`, so it can simply do it.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: app/build/web
