@@ -203,11 +203,41 @@ List<DropdownMenuEntry<T>> facetEntries<T>(
   required bool Function(T) available,
   required T? selected,
   DropdownMenuEntry<T>? anyOption,
+  bool Function(T)? priceable,
+  String? unitName,
 }) {
   final live = <DropdownMenuEntry<T>>[];
+  final unpriced = <DropdownMenuEntry<T>>[];
   final dead = <DropdownMenuEntry<T>>[];
   for (final (value, label) in options) {
     if (available(value) || value == selected) {
+      // Records, but none the chosen unit can express. Worth choosing: the
+      // rows are real and the table will show them. It just cannot produce an
+      // average, so it sits below the options that can and says why. Not
+      // disabled, because browsing those rows is a perfectly good thing to
+      // want and the figures say NA for themselves.
+      if (priceable != null && !priceable(value) && value != selected) {
+        unpriced.add(
+          DropdownMenuEntry(
+            value: value,
+            label: label,
+            labelWidget: Text.rich(
+              TextSpan(children: [
+                TextSpan(text: label),
+                TextSpan(
+                  text: unitName == null
+                      ? '  (no priced entries)'
+                      : '  (none per $unitName)',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        );
+        continue;
+      }
       live.add(DropdownMenuEntry(value: value, label: label));
     } else {
       dead.add(
@@ -226,5 +256,5 @@ List<DropdownMenuEntry<T>> facetEntries<T>(
       );
     }
   }
-  return [?anyOption, ...live, ...dead];
+  return [?anyOption, ...live, ...unpriced, ...dead];
 }

@@ -66,9 +66,9 @@ void main() {
       );
       // Three, not one: the dropdown must not say an option is empty when
       // choosing it would return records.
-      expect(counts.counties['Oxfordshire'], 3);
+      expect(counts.counties['Oxfordshire']?.total, 3);
       expect(counts.counties['Oxfordshire (?)'], isNull);
-      expect(counts.counties['Yorkshire'], 1);
+      expect(counts.counties['Yorkshire']?.total, 1);
     });
 
     test('the facet is still judged against the other filters, not itself',
@@ -80,7 +80,7 @@ void main() {
       );
       expect(counts.matching, 1);
       // Yorkshire still on offer, because changing only the county reaches it.
-      expect(counts.counties['Yorkshire'], 1);
+      expect(counts.counties['Yorkshire']?.total, 1);
     });
   });
 }

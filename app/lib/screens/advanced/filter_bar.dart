@@ -297,6 +297,8 @@ class _FilterBarState extends State<FilterBar> {
       _f.dateFilter.name,
       years.start,
       years.end,
+      // The chosen unit decides which options can produce a figure.
+      widget.outputUnit?.id,
     ].join('|');
     if (key == _facetKey) return _facetCounts;
 
@@ -310,6 +312,7 @@ class _FilterBarState extends State<FilterBar> {
         endYear: years.end,
         county: _f.county,
         category: _f.category,
+        unitDimension: widget.outputUnit?.dimension,
       ),
     );
     _facetKey = key;
@@ -820,6 +823,8 @@ class _FilterBarState extends State<FilterBar> {
                   value: null, label: 'Any county'),
               options: [for (final c in widget.counties) (c, c)],
               available: (c) => counts.counties.containsKey(c),
+              priceable: (c) => (counts.counties[c]?.priced ?? 0) > 0,
+              unitName: widget.outputUnit?.name,
               selected: _f.county,
             ),
           ),
@@ -839,6 +844,8 @@ class _FilterBarState extends State<FilterBar> {
                   value: null, label: 'Any category'),
               options: [for (final c in widget.categories) (c, c)],
               available: (c) => counts.categories.containsKey(c),
+              priceable: (c) => (counts.categories[c]?.priced ?? 0) > 0,
+              unitName: widget.outputUnit?.name,
               selected: _f.category,
             ),
           ),

@@ -31,7 +31,15 @@ class FacetQuery {
     this.category,
     this.subcategory,
     this.specific,
+    this.unitDimension,
   });
+
+  /// The kind of unit the reader is pricing in, so an option can be counted
+  /// on whether choosing it would produce *figures* rather than merely rows.
+  ///
+  /// Null for the two defaults, which can price anything, and which is also
+  /// what [dimensionsComparable] says about a null dimension.
+  final String? unitDimension;
 
   final double startYear;
   final double endYear;
@@ -41,6 +49,27 @@ class FacetQuery {
   final String? category;
   final String? subcategory;
   final String? specific;
+}
+
+/// What one dropdown option would find.
+///
+/// Two numbers, because there are two ways for an option to be a dead end and
+/// they deserve different treatment. [total] is how many records choosing it
+/// returns. [priced] is how many of those can be expressed in the unit the
+/// reader is pricing in.
+///
+/// An option with no records at all is struck out and disabled: there is
+/// nothing behind it. An option with records but none that can be priced is
+/// still worth choosing — the rows are real and the table will show them —
+/// it just cannot contribute to an average, so it is sorted below the ones
+/// that can and marked, rather than disabled.
+class FacetCount {
+  const FacetCount(this.total, this.priced);
+  final int total;
+  final int priced;
+
+  FacetCount get oneMoreTotal => FacetCount(total + 1, priced);
+  FacetCount get oneMoreBoth => FacetCount(total + 1, priced + 1);
 }
 
 /// How many entries each option would still find.
@@ -59,12 +88,12 @@ class FacetCounts {
     required this.matching,
   });
 
-  final Map<String, int> counties;
-  final Map<String, int> localities;
-  final Map<String, int> timePeriods;
-  final Map<String, int> categories;
-  final Map<String, int> subcategories;
-  final Map<String, int> specifics;
+  final Map<String, FacetCount> counties;
+  final Map<String, FacetCount> localities;
+  final Map<String, FacetCount> timePeriods;
+  final Map<String, FacetCount> categories;
+  final Map<String, FacetCount> subcategories;
+  final Map<String, FacetCount> specifics;
 
   /// The kinds of unit the fully-matching entries are measured in — mass,
   /// volume, count and so on, with null for the ones nobody has classified.
@@ -131,16 +160,16 @@ enum _Axis { county, locality, timePeriod, category, subcategory, specific }
 /// filter, which is precisely what the dropdown is offering to do. Fail two
 /// and it is out of reach either way.
 FacetCounts countFacets(Iterable<PriceEntry> entries, FacetQuery q) {
-  final counties = <String, int>{};
-  final localities = <String, int>{};
-  final timePeriods = <String, int>{};
-  final categories = <String, int>{};
-  final subcategories = <String, int>{};
-  final specifics = <String, int>{};
+  final counties = <String, FacetCount>{};
+  final localities = <String, FacetCount>{};
+  final timePeriods = <String, FacetCount>{};
+  final categories = <String, FacetCount>{};
+  final subcategories = <String, FacetCount>{};
+  final specifics = <String, FacetCount>{};
   final dimensions = <String?>{};
   var matching = 0;
 
-  Map<String, int> mapFor(_Axis axis) => switch (axis) {
+  Map<String, FacetCount> mapFor(_Axis axis) => switch (axis) {
         _Axis.county => counties,
         _Axis.locality => localities,
         _Axis.timePeriod => timePeriods,
@@ -188,17 +217,29 @@ FacetCounts countFacets(Iterable<PriceEntry> entries, FacetQuery q) {
 
     if (failures > 1) continue;
 
+    // Whether this record could be expressed in the unit being asked for,
+    // which is a different question from whether it matches the filters.
+    final priced =
+        dimensionsComparable(e.primaryMeasure?.dimension, q.unitDimension);
+
+    void tally(_Axis axis) {
+      final v = valueFor(axis, e);
+      if (v == null) return;
+      mapFor(axis).update(
+        v,
+        (c) => priced ? c.oneMoreBoth : c.oneMoreTotal,
+        ifAbsent: () => priced ? const FacetCount(1, 1) : const FacetCount(1, 0),
+      );
+    }
+
     if (failures == 0) {
       matching++;
       dimensions.add(e.primaryMeasure?.dimension);
       for (final axis in _Axis.values) {
-        final v = valueFor(axis, e);
-        if (v != null) mapFor(axis).update(v, (n) => n + 1, ifAbsent: () => 1);
+        tally(axis);
       }
     } else {
-      final axis = soleFailure!;
-      final v = valueFor(axis, e);
-      if (v != null) mapFor(axis).update(v, (n) => n + 1, ifAbsent: () => 1);
+      tally(soleFailure!);
     }
   }
 

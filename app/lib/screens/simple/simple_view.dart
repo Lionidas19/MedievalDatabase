@@ -210,6 +210,9 @@ class _SimpleViewState extends State<SimpleView> {
       _category?.name,
       _subcategory?.name,
       _specific?.name,
+      // The chosen unit changes which options can produce a figure, so it
+      // changes the counts and has to be part of the key.
+      _outputUnit?.id,
     ].join('|');
     if (key == _facetKey) return _facets;
     _facetKey = key;
@@ -224,6 +227,7 @@ class _SimpleViewState extends State<SimpleView> {
         category: _category?.name,
         subcategory: _subcategory?.name,
         specific: _specific?.name,
+        unitDimension: _outputUnit?.dimension,
       ),
     );
   }
@@ -242,6 +246,7 @@ class _SimpleViewState extends State<SimpleView> {
     required bool Function(T) available,
     required T? selected,
     DropdownMenuEntry<T>? anyOption,
+    bool Function(T)? priceable,
   }) =>
       facetEntries<T>(
         context,
@@ -249,6 +254,8 @@ class _SimpleViewState extends State<SimpleView> {
         available: available,
         selected: selected,
         anyOption: anyOption,
+        priceable: priceable,
+        unitName: _outputUnit?.name,
       );
 
   @override
@@ -396,6 +403,8 @@ class _SimpleViewState extends State<SimpleView> {
                               options: [for (final c in counties) (c, c.label)],
                               available: (c) =>
                                   facets.counties.containsKey(c?.label),
+                              priceable: (c) =>
+                                  (facets.counties[c?.label]?.priced ?? 0) > 0,
                               selected: _county,
                             ),
                             onSelected: (v) => setState(() {
@@ -464,6 +473,8 @@ class _SimpleViewState extends State<SimpleView> {
                               ],
                               available: (t) =>
                                   facets.timePeriods.containsKey(t),
+                              priceable: (t) =>
+                                  (facets.timePeriods[t]?.priced ?? 0) > 0,
                               selected: _timePeriod,
                             ),
                             onSelected: (v) => setState(() => _timePeriod = v),
@@ -542,6 +553,8 @@ class _SimpleViewState extends State<SimpleView> {
                             options: [for (final c in categories) (c, c.name)],
                             available: (c) =>
                                 facets.categories.containsKey(c?.name),
+                            priceable: (c) =>
+                                (facets.categories[c?.name]?.priced ?? 0) > 0,
                             selected: _category,
                           ),
                           onSelected: (v) => setState(() {
@@ -566,6 +579,9 @@ class _SimpleViewState extends State<SimpleView> {
                             ],
                             available: (s) =>
                                 facets.subcategories.containsKey(s?.name),
+                            priceable: (s) =>
+                                (facets.subcategories[s?.name]?.priced ?? 0) >
+                                    0,
                             selected: _subcategory,
                           ),
                           onSelected: (v) => setState(() {
@@ -591,6 +607,8 @@ class _SimpleViewState extends State<SimpleView> {
                               options: [for (final s in specifics) (s, s.name)],
                               available: (s) =>
                                   facets.specifics.containsKey(s?.name),
+                              priceable: (s) =>
+                                  (facets.specifics[s?.name]?.priced ?? 0) > 0,
                               selected: _specific,
                             ),
                             onSelected: (v) => setState(() {
