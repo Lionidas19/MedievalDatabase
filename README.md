@@ -5,7 +5,7 @@ A normalized SQLite database of English price records from the 1270s–80s
 Vol. 2), plus a Flutter web app for browsing, filtering, sorting and editing
 it.
 
-7,800 price entries covering 1270–1291, across 244 localities, 66 counties and
+7,501 price entries covering 1270–1291, across 244 localities, 66 counties and
 633 specific goods and services.
 
 The Data sheet runs to 10,379 rows, but everything from row 7801 onward is an
@@ -25,7 +25,7 @@ There is an **Install as an app** item in the ⋮ menu (Chrome and Edge). Taking
 it gives the site a desktop icon and its own window, and stores everything
 locally, so it opens with no internet at all.
 
-**The Explorer** — all 7,800 records, filtered, sorted and grouped, with the
+**The Explorer** — all 7,501 records, filtered, sorted and grouped, with the
 price of each worked out in whatever unit you choose:
 
 ![The Explorer, showing price records with a price per kilogram for each](docs/explorer.png)
@@ -90,7 +90,7 @@ to pick and no folder to choose.
 ### It works with no internet
 
 Nothing is fetched at runtime. Loaded with every Google domain blocked, the
-app makes **no outside requests at all** and reaches all 7,800 entries. The
+app makes **no outside requests at all** and reaches all 7,501 entries. The
 rendering engine, both typefaces and the engine's own fallback font ship with
 it, and no data ever leaves the machine — which matters for a tool used on a
 train, behind an institutional proxy, or in an archive with no wifi.
@@ -320,7 +320,7 @@ pip install openpyxl
 python tools/build_normalized_db.py
 ```
 
-This is how the 7,800 entries first got here: it normalizes the spreadsheet's
+This is how the 7,501 entries first got here: it normalizes the spreadsheet's
 flat sheets into dimension and junction tables with UUID keys, and prints a
 report of anything in the source that could not be resolved.
 
@@ -345,7 +345,7 @@ flutter test
 
 Runs on the Dart VM — no browser, no WASM. Alongside the unit tests and the
 table's layout tests,
-`calculation_corpus_test.dart` replays all 7,800 entries through the
+`calculation_corpus_test.dart` replays all 7,501 entries through the
 calculator and compares every derived value against what the spreadsheet
 computed for the same entry. 7,799 agree on all six; the one exception is
 entry 7292 and it is listed explicitly so that it cannot rot into a silent

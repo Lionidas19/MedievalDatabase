@@ -46,7 +46,7 @@ Quick lookup alike — not a mode chosen once.
 
 ### Asked for, and not finished
 
-- **`UKP 2026` conversion — the numbers have arrived; the UI has not.** The
+- ~~**`UKP 2026` conversion.**~~ **Done.** The
   researcher's current workbook carries a filled Currency tab, and
   `currency_factors` now holds a factor for all 250 years from 1270 to 1519,
   with `currency_rebasing` set to 2017 → 2026 at ×1.3444.
@@ -61,10 +61,10 @@ Quick lookup alike — not a mode chosen once.
   `Pence` column is 1 throughout, because a 12 there would silently turn every
   factor into pounds per shilling.
 
-  Not built: the runtime multiplication in `pricing.dart` and anywhere to show
-  it in the UI. The third figure ("per output Y") depends on the reader's
-  chosen unit, so it belongs in `pricing.dart` beside `pencePerOutputY`, never
-  as a stored column — even though the workbook now has such a column.
+  **Built, as of v0.0.3.** `pricing.dart` takes one combined factor and
+  returns all three figures; see "Modern money is computed, never stored".
+  They are computed rather than stored, because the third depends on the
+  reader's chosen unit, even though the workbook now carries such a column.
 
   **Never invent the factors.** Retail prices, earnings and share of GDP give
   answers an order of magnitude apart. That choice was the researcher's, and
@@ -106,7 +106,7 @@ keys throughout.
 
 | Group | Tables | Rows |
 |---|---|---|
-| Facts | `price_entries` | 7,800 (7,435 with both an item and a price) |
+| Facts | `price_entries` | 7,501 (7,435 with both an item and a price) |
 | Place | `counties` / `places` | 66 / 789 |
 | Taxonomy | `categories` → `subcategories` → `specifics` | 19 / 79 / 609 |
 | Units | `measures` / `standards` | 576 / 99 |
@@ -114,7 +114,7 @@ keys throughout.
 | Local variance | `place_measure_overrides` | 390 |
 | Small dims | `time_periods` 67, `countries` 1, `sources` 1, `coin_types` 0, `multiplier_measures` 1 | |
 | Modern money | `currency_factors` / `currency_rebasing` | 250 / 1, both filled |
-| Test oracle | `excel_cached_calculations` | 7,800 |
+| Test oracle | `excel_cached_calculations` | 7,501 |
 
 ### Three invariants that define the schema
 
@@ -140,9 +140,18 @@ keys throughout.
 - `coin_types` is empty; the source records none.
 - ~~`currency_factors` is empty~~ — filled as of the Leo2026v workbook. The
   remaining gap is the UI, not the data.
-- `measures.dimension` / `standards.dimension` are **provisional**: 48 measures
-  unclassified, 11 `guessed`, the rest `read` from the researcher's own
-  conversion columns. Confirmation is pending via `review/`.
+- `measures.dimension` / `standards.dimension` are **mostly read, not
+  guessed**: 455 read from the researcher's own conversion columns, 45 guessed
+  from the unit's name, 76 unknown. Only **64 entries** (0.9%) have a
+  valuation measure that is guessed or unknown.
+
+  It was 42% until the column names were checked. `dimensions.py` matches
+  conversion-column headings exactly, and the current workbook renamed
+  `Heads/Entities` to `Heads Entities` and split `Gallons` and `Quart` into
+  ale and wine measures. Every countable unit silently lost its one piece of
+  evidence. **A renamed column does not fail, it stops classifying**, which is
+  the same failure mode as the Data column map and is why that one now has an
+  assertion. If a re-import ever moves `read` downwards, look here first.
 - Years are **not** adjusted for the year start. These prices come off
   account rolls, whose year ran from **Michaelmas (29 September)** —
   corrected by the researcher from 25 March, which is a different convention:
@@ -150,12 +159,17 @@ keys throughout.
   year turned. Which one Rogers himself followed is still open.
   `calendar_test.dart` pins the wording so the wrong date cannot creep back.
 - Rows 7801+ of the Data sheet are unfilled template rows, skipped on import.
-- **Entries 7441–7800 are imported but hollow.** 7441–7501 carry a year,
-  Food / Grain / Wheat and a page number and nothing else; 7502–7800 carry a
-  year of 1286 and a default measure and nothing else. 7,435 of the 7,800 have
-  both an item and a price. They are kept deliberately: the researcher intends
-  to fill them in **through the app** and send the database back, which is the
-  cycle below working as designed. Do not "clean" them away.
+- **Entries 7502–7800 are not imported.** They carried a year of 1286 and
+  nothing else at all: no place, no item, no price, only the dropdown
+  defaults the sheet stamps on blank rows. They used to reach the app as 299
+  rows of dashes a reader could sort into, which is why it claimed 7,800
+  entries while 7,501 said anything. The researcher confirmed they can go, and
+  `CONTENT_COLUMNS` in the importer is the rule: **a year is not content.**
+- **Entries 7441–7501 are imported and thin.** A year, Food / Grain / Wheat
+  and a page number, but no place, quantity or price. They stay because they
+  say something, and because the researcher intends to fill them in through
+  the app and send the database back, which is the cycle below working as
+  designed. 7,435 of the 7,501 have both an item and a price.
 
 ## The calculation layer
 
@@ -195,6 +209,8 @@ Flutter web, `provider` for state, `sqlite3` WASM.
 | `state/app_controller.dart` | ChangeNotifier: dirty tracking, debounced local save, add/edit/delete, timestamped export, and `revision` (bumped on every data change — the Explorer's result cache keys off it) |
 | `state/view_preferences.dart` | `DetailLevel`, `GroupBy`, `ThemeVariant`, `TableDensity`, theme mode, Gregorian toggle; persisted |
 | `screens/home_shell.dart` | app bar, nav rail / bottom nav, save indicator, Display button |
+| `screens/guide_screen.dart` | **Guide** — what the app is and how to use it; launches the tour |
+| `screens/tour/tour.dart` | the click-through tour, its targets and its overlay |
 | `screens/display_settings.dart` | the one dialog for detail level, theme, palette, density, dates |
 | `screens/advanced/advanced_view.dart` | **Explorer** — orchestrates the memoised filter→price→sort→group pipeline |
 | `screens/advanced/entry_columns.dart` | which columns exist at which `DetailLevel`, and why a cell is empty |
@@ -206,7 +222,7 @@ Flutter web, `provider` for state, `sqlite3` WASM.
 
 Two rules the Explorer depends on:
 
-- **Never filter or price inside `build()`.** The pipeline touches 7,800
+- **Never filter or price inside `build()`.** The pipeline touches 7,501
   entries; it is cached against `_ResultKey`, which includes
   `AppController.revision`. Without that it re-ran every time the save
   indicator ticked from "Saving…" to "Saved".
@@ -358,7 +374,7 @@ against every other rule here. It is allowed only because it is hemmed in:
   raw values would be dragged wherever the dearest record sits.
 - **It refuses more than it answers.** Three distinct years minimum, a positive
   result, never more than ten years beyond the observed range — 80 estimates
-  across 7,800 entries with the default filters.
+  across 7,501 entries with the default filters.
 - **It is never mistaken for data.** Drawn in italics with a `~`, and each
   carries a tooltip naming what it was fitted through and what fraction of the
   year-to-year movement that accounted for. It stays out of group medians.
@@ -411,7 +427,7 @@ would pin a reader to an old build forever and network-first would make every
 load wait on 20 MB that did not change.
 
 Verified: 19 files cached from a single visit, then the network cut entirely
-and the app reaches 7,800 entries with zero page errors; manifest parses with
+and the app reaches 7,501 entries with zero page errors; manifest parses with
 no errors; `beforeinstallprompt` fires. Note it will **not** fire under
 Playwright's default profile — automation suppresses the banner — so test
 installability with `launchPersistentContext` and some real interaction, or
@@ -463,7 +479,7 @@ obvious until the app was loaded with Google blocked:
 Builds also pass `--no-web-resources-cdn`, including in the Pages workflow.
 
 Test it the way it was found: block `*.gstatic.com` and `*.googleapis.com` in
-the browser and load the app. It should reach 7,800 entries with **zero blocked
+the browser and load the app. It should reach 7,501 entries with **zero blocked
 requests and zero page errors** — there is now nothing left to block.
 
 ### Responsiveness is about height, not just width
@@ -476,7 +492,7 @@ are looking at: every pixel of toolbar is a row of records you cannot see.
 - drops the detail chips from the Explorer toolbar — the app bar already
   carries that choice, so it is the one control that can go without loss, and
   losing it lets everything else fit on one row;
-- narrows the group menu and shortens the entry count to '7800 / 7800';
+- narrows the group menu and shortens the entry count to '7501 / 7501';
 - tightens the Specifics lookup's rhythm and drops the level description,
   which is what brings Generate back above the fold.
 
@@ -534,6 +550,119 @@ on a scholarly judgement with more than one defensible answer, so printing
 £212.52275 would claim a precision nobody has. `entry_table_test.dart`
 asserts the word "scale" survives in the explanation.
 
+### A missing price is not a price of nought
+
+`RecordedPrice.inPence` sums blanks as nought, and that is correct: the
+spreadsheet's own formula is `£×240 + s×12 + d` over blank cells, and
+`excel_cached_calculations` is compared against it. **Do not "fix" it.**
+
+But nought is not a price. 66 entries record none at all, 61 of them in 1286,
+and once "Recorded unit" became the default output unit that figure started
+feeding every median, mean and chart on the screen. Counting those as nought
+dragged the 1286 median to the floor and drew a trend line diving into the
+axis.
+
+So `PriceCalculation.recordedPricePerUnit` is `inPence` with the blanks taken
+out, and that is what the views average. A *genuine* nought is kept, because
+14 entries really do record one and the source is saying something by it.
+`pricing_test.dart` pins all four cases.
+
+### The figures are meant to be seen
+
+They were a grey run of small text and observed testers "genuinely did not
+recall seeing the averages at all", though they had just generated them. The
+researcher asked for them to be "much more visually distinct, arguably the
+first thing they should see".
+
+They now sit in a tinted panel with the median set large and in the accent
+colour. The median leads on purpose: with a mean of 253 against a median of
+0.19, leading with the mean would be leading with the wrong number.
+
+### The guide and the tour
+
+`screens/guide_screen.dart` is the third rail destination, and
+`screens/tour/tour.dart` the click-through tour it launches. The researcher
+asked for "a little of both": a page that says what the database is and how to
+use it, plus a tour that says "this button does x".
+
+**Every word in both is placeholder.** He said he would write the copy. It is
+written out properly rather than left as lorem so he can edit over something
+real, and so the app is not embarrassing while we wait. Replace freely.
+
+How the tour points at things:
+
+- A control marks itself with `TourTarget(stop: TourStop.pricePer, ...)`,
+  which registers a `GlobalKey` in a plain static map. A static registry
+  rather than an InheritedWidget because registrations come from four screens
+  and the only reader is an `OverlayEntry`, which sits in nobody's subtree.
+- **A stop that is not on screen is skipped, not drawn.** Half these controls
+  exist only at certain detail levels and below 640px there is no table at
+  all, so `rectOf` returning null is the normal case rather than a fault.
+- **A step may have no target at all.** The one about opening a record is
+  like that: a row lives inside a sliver list and pointing at one of 7,501
+  would mean threading a key through every row. A null stop centres the card.
+
+The scrim is a `CustomPainter` doing `Path.combine(difference)` between the
+screen and the hole. Tapping it advances, because that is what people try
+first.
+
+### `(?)` beside a control, and the text in one file
+
+`widgets/info_dot.dart` holds both halves. `InfoDot` is the column headings'
+mechanism made reusable — a tooltip in `TooltipTriggerMode.manual`, opened by
+tapping a target of its own, because a plain tooltip is hover-only and half
+the audience is on a tablet. Manual mode governs touch only, so a mouse still
+gets hover without a second code path.
+
+`Explain` holds every string. They are gathered in one class **so the
+researcher can send prose and have it dropped in without anybody touching a
+layout**; the ones there now are placeholders written from what each control
+does. The Michaelmas note lives behind one of these rather than printed under
+the date fields, which is what he asked for.
+
+### The chart draws a median, and draws gaps as gaps
+
+`widgets/price_trend_chart.dart` is a `CustomPainter` over plain numbers. No
+package: the app must run with no network and ships no third-party chart
+code, and a polyline is not worth a dependency.
+
+Three decisions, each load-bearing:
+
+- **The median per year, never the mean.** Across a broad selection the mean
+  runs to 253 against a median of 0.19; a line of means is a line about one
+  record.
+- **A year with no priced record is a gap**, not a zero. The path breaks
+  rather than diving to the axis and back, because a missing price is silence
+  and a zero is a claim.
+- **The mark is sized by how many records stand behind it**, so a year
+  resting on two shows as a small dot rather than as a confident point.
+
+It is fed from the same `priced` list as the headline figure, so the line can
+never disagree with the number above it.
+
+### Every dropdown is the filterable one
+
+There are no bare `DropdownMenu`s left in `app/lib`. The Explorer's filter
+panel kept four of them (County, Category, Dates, Group) long after the
+shared widget existed, and they failed the same way Price per had: an
+unbounded menu grew tall enough to flip *above* the field and cover the very
+text being typed into it, so narrowing by typing was impossible. The reader's
+words were "virtually impossible to type".
+
+`FilterableDropdown` fixes it with `menuHeight: 320`, which is what makes the
+list drop below the field and scroll. If a new dropdown appears anywhere, use
+that widget. The same bug has now been found three times in three places.
+
+### Sentence-length tooltips need a width
+
+`Tooltip` has no default maximum, so a four-sentence message renders as one
+line the full width of the monitor, which reads as a layout fault rather than
+a message. Anything longer than a few words carries
+`constraints: BoxConstraints(maxWidth: 380)`. The short ones ("Clear",
+"Detail, theme and row height") are left alone because they wrap to nothing.
+`ThemeData.tooltipTheme` cannot carry this: `TooltipThemeData` has no
+constraints field, so it has to be per-widget.
+
 ### The importer checks its own column map
 
 `build_normalized_db.py` reads the Data sheet **by position**, and between the
@@ -573,7 +702,7 @@ muted and a size down, the specific bold. Read as one flat grey run,
 characters followed by the only ones that matter, and readers locked onto the
 category instead of the thing itself. The emphasis is **weight and contrast,
 not size**: a larger glyph would change the line height of every row in a
-table of 7,800. Used by the table, the phone cards, the details dialog and the
+table of 7,501. Used by the table, the phone cards, the details dialog and the
 Specifics lookup result heading, so an answer is recognisably about the same
 thing wherever it appears.
 
@@ -617,7 +746,7 @@ Two things that made the app look broken when it was merely unable to answer:
 Item suggestions are ordered by **how many entries actually sit under each
 path**, not alphabetically. Typing `oats` offered `Agricultural Labour /
 Mowing / Oats (Mowing)` before `Food / Grain / Oats`, because A sorts before
-F. Counted once per `AppController.revision`: the count walks all 7,800
+F. Counted once per `AppController.revision`: the count walks all 7,501
 entries and the search box rebuilds on every keystroke.
 
 ### Quick lookup only offers what it can answer
@@ -763,10 +892,10 @@ cd app && flutter test              # Dart VM, no browser, no WASM
 
 ## Tests
 
-`app/test/calculation_corpus_test.dart` replays all 7,800 entries through the
+`app/test/calculation_corpus_test.dart` replays all 7,501 entries through the
 calculator and compares six derived values each against
 `test/fixtures/calculation_corpus.csv` (what the spreadsheet computed).
-**All 7,800 now agree on all six, with zero disagreements.**
+**All 7,501 now agree on all six, with zero disagreements.**
 
 Entry 7292 was the one exception for months, and how it resolved is worth
 keeping. Its measure is spelled `Garb, Steel [?81 lb?]`, and in the August
@@ -812,7 +941,7 @@ a size nobody happened to try.
 
 `tools/build_normalized_db.py`, `build_review_db.py` and `dump_formulas.py`
 read the spreadsheet and so cannot run from a fresh clone. That is intended:
-they are provenance for how the 7,800 entries got here, not part of the build.
+they are provenance for how the 7,501 entries got here, not part of the build.
 Everything needed to build and run the app is present.
 
 ## The database is the source of truth
@@ -821,7 +950,7 @@ This changed once the researcher began logging records of their own, and it
 inverts what the ETL is for.
 
 `app/data/1270s80sDatabase_normalized.sqlite` is the artifact of record. The
-spreadsheet is provenance for the original 7,800 rows and nothing more — it
+spreadsheet is provenance for the original 7,501 rows and nothing more — it
 cannot restore anything logged since. `build_normalized_db.py` therefore
 refuses to run when the database holds entries that have no row in
 `excel_cached_calculations` (the marker of having come from the workbook), or

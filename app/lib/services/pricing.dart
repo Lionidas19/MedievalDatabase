@@ -61,6 +61,15 @@ class RecordedPrice {
       (pounds ?? 0) * 240 + (shillings ?? 0) * 12 + (pence ?? 0);
 
   bool get isZero => inPence == 0;
+
+  /// Whether the source records no price here at all.
+  ///
+  /// Distinct from a price of zero, and the distinction matters: [inPence]
+  /// sums blanks as nought because that is what the spreadsheet's own
+  /// `£×240 + s×12 + d` does, and the cached-calculation oracle is compared
+  /// against it. But nought is not a price, and an entry with no price is not
+  /// an entry for something free.
+  bool get isAbsent => pounds == null && shillings == null && pence == null;
 }
 
 /// Everything the chain derives for one entry, at one chosen output unit.
@@ -78,6 +87,7 @@ class PriceCalculation {
     required this.outputYQuantity,
     required this.pencePerOutputY,
     required this.unresolvedMeasures,
+    this.recordedPricePerUnit,
     this.modernTotalSale,
     this.modernPerValuationMeasure,
     this.modernPerOutputY,
@@ -115,6 +125,17 @@ class PriceCalculation {
   /// defined. Non-zero means [totalMetric] is an undercount, which is worth
   /// surfacing rather than hiding.
   final int unresolvedMeasures;
+
+  /// What one of the entry's own valuation measures cost, or null where the
+  /// source records no price.
+  ///
+  /// This is [priceInPence] with the blanks taken out. It exists because
+  /// "Recorded unit" is the default output unit, so this figure feeds every
+  /// median, mean and chart on the screen. Sixty-six entries record no price
+  /// at all, sixty-one of them in 1286, and counting those as nought pulled
+  /// the 1286 median to the floor and drew a chart that dived into the axis.
+  /// A missing price is silence; nought is a claim.
+  final double? recordedPricePerUnit;
 
   /// The three pence figures again, in the money of the year being reported
   /// in. Null wherever there is no factor for the entry's year, or no pence
@@ -183,11 +204,13 @@ PriceCalculation calculatePrice({
     outputYQuantity: outputYQuantity,
     pencePerOutputY: pencePerOutputY,
     unresolvedMeasures: unresolved,
+    recordedPricePerUnit: price.isAbsent ? null : priceInPence,
     // Pence are converted, never the other way about. Each of these is the
     // figure directly above it in modern money, so a reader comparing them is
     // comparing the same thing twice rather than two different sums.
     modernTotalSale: _modern(totalSaleInPence, modernPoundsPerPenny),
-    modernPerValuationMeasure: _modern(priceInPence, modernPoundsPerPenny),
+    modernPerValuationMeasure: _modern(
+        price.isAbsent ? null : priceInPence, modernPoundsPerPenny),
     modernPerOutputY: _modern(pencePerOutputY, modernPoundsPerPenny),
   );
 }

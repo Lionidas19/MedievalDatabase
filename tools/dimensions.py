@@ -20,7 +20,10 @@ evidence behind it.
 #: Columns that only ever appear on a real weight.
 STRONG_MASS = {
     "Gram", "Kg", "US Pound", "US Pounds", "US Ounce", "US Dram", "US Grain",
-    "Troy Pound/Ap lb", "US Stone", "US Clove", "Units (grams/grains)",
+    "US Stone", "US Clove",
+    # Both spellings again; see the note on COUNT below.
+    "Troy Pound/Ap lb", "Troy Pound Ap lb",
+    "Units (grams/grains)", "Base Units",
 }
 
 #: Grain-counts are filled in for all sorts of units, countable ones included —
@@ -28,9 +31,24 @@ STRONG_MASS = {
 #: they say nothing about what kind of unit this is.
 WEAK_MASS = {"Wheat Grains", "Barley Grains"}
 
-COUNT = {"Heads/Entities", "Bundles", "Pairs"}
-VOLUME = {"Litres", "Gallons", "Quart", "Wine Pint", "US Bushel", "US Peck"}
-LENGTH = {"Metres", "Km", "Cm", "Feet", "Inches", "Yards"}
+#: Both spellings of each, because the researcher's workbook renames these
+#: columns between versions and matching is exact. 'Heads/Entities' became
+#: 'Heads Entities', and the single 'Gallons' and 'Quart' columns were split
+#: into ale and wine measures, which are genuinely different volumes.
+#:
+#: That rename cost real accuracy before it was noticed: measures read
+#: straight from the sheet fell from 477 to 384 and the guesses rose to match,
+#: because every countable unit lost its one piece of evidence. A column name
+#: that no longer matches does not fail, it just quietly stops classifying.
+COUNT = {"Heads/Entities", "Heads Entities", "Bundles", "Pairs"}
+VOLUME = {
+    "Litres", "Wine Pint", "US Bushel", "US Peck",
+    "Gallons", "Ale Gallons", "Wine Gallons",
+    "Quart", "Ale Quart", "Wine Quart",
+}
+LENGTH = {
+    "Metres", "Km", "Cm", "Feet", "Inches", "Yards", "Cloth Inches",
+}
 
 #: Last resort, for units carrying no conversion columns at all.
 NAME_HINTS = [

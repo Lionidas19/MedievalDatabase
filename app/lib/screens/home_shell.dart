@@ -7,6 +7,8 @@ import '../state/app_controller.dart';
 import '../state/view_preferences.dart';
 import '../theme.dart';
 import 'display_settings.dart';
+import 'guide_screen.dart';
+import 'tour/tour.dart';
 import 'onboarding_screen.dart';
 import 'advanced/advanced_view.dart';
 import 'advanced/edit_entry_dialog.dart';
@@ -58,7 +60,7 @@ class _HomeShellState extends State<HomeShell> {
       builder: (context, constraints) {
         final compact = Breakpoints.isCompact(constraints.maxWidth);
         return Scaffold(
-          appBar: _TopBar(compact: compact),
+          appBar: _TopBar(width: constraints.maxWidth),
           body: Column(
             children: [
               if (app.error != null) _ErrorBanner(message: app.error!),
@@ -147,14 +149,28 @@ class _ModeBody extends StatelessWidget {
     // and only that one subscribes.
     final advanced = mode == ViewMode.advanced;
     return IndexedStack(
-      index: advanced ? 0 : 1,
+      index: switch (mode) {
+        ViewMode.advanced => 0,
+        ViewMode.simple => 1,
+        ViewMode.guide => 2,
+      },
       children: [
         AdvancedView(active: advanced),
-        SimpleView(active: !advanced),
+        SimpleView(active: mode == ViewMode.simple),
+        GuideScreen(active: mode == ViewMode.guide),
       ],
     );
   }
 }
+
+/// The order both navigations show, and the only place it is stated.
+///
+/// Index with this, never with `ViewMode.values`. The enum declares
+/// `simple` first because `simple` was the first screen written; the rail
+/// shows `advanced` first because that is the one people arrive on. Indexing
+/// by the enum highlighted Advanced Search whenever Data Display was open,
+/// and the other way about.
+const _order = [ViewMode.advanced, ViewMode.simple, ViewMode.guide];
 
 class _SideNav extends StatelessWidget {
   const _SideNav({required this.app});
@@ -167,16 +183,17 @@ class _SideNav extends StatelessWidget {
     // under the destinations, which would read as a third one — so the version
     // goes below the rail in a Column. The Column carries the rail's own
     // colour so no seam shows where one ends and the other begins.
-    return ColoredBox(
+    return TourTarget(
+      stop: TourStop.views,
+      child: ColoredBox(
       color: scheme.surfaceContainerLow,
       child: Column(
         children: [
           Expanded(
             child: NavigationRail(
-              selectedIndex: app.mode == ViewMode.advanced ? 0 : 1,
+              selectedIndex: _order.indexOf(app.mode),
               labelType: NavigationRailLabelType.all,
-              onDestinationSelected: (i) =>
-                  app.setMode(i == 0 ? ViewMode.advanced : ViewMode.simple),
+              onDestinationSelected: (i) => app.setMode(_order[i]),
               destinations: [
                 // The unselected icon sits in an outlined pill so it looks
                 // like something to press. Material gives the selected one a
@@ -192,13 +209,21 @@ class _SideNav extends StatelessWidget {
                   selectedIcon: const Icon(Icons.eco),
                   label: const Text('Advanced Search'),
                 ),
+                // The researcher asked for this third button by name, and for
+                // the reason it is here: nobody in his testing found the
+                // second screen, let alone worked out what it was for.
+                NavigationRailDestination(
+                  icon: _RailIcon(icon: Icons.help_outline),
+                  selectedIcon: const Icon(Icons.help),
+                  label: const Text('Guide'),
+                ),
               ],
             ),
           ),
           const _VersionLabel(),
         ],
       ),
-    );
+    ));
   }
 }
 
@@ -264,9 +289,8 @@ class _BottomNav extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return NavigationBar(
-      selectedIndex: app.mode == ViewMode.advanced ? 0 : 1,
-      onDestinationSelected: (i) =>
-          app.setMode(i == 0 ? ViewMode.advanced : ViewMode.simple),
+      selectedIndex: _order.indexOf(app.mode),
+      onDestinationSelected: (i) => app.setMode(_order[i]),
       destinations: const [
         NavigationDestination(
           icon: Icon(Icons.table_chart_outlined),
@@ -277,6 +301,11 @@ class _BottomNav extends StatelessWidget {
           icon: Icon(Icons.eco_outlined),
           selectedIcon: Icon(Icons.eco),
           label: 'Advanced Search',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.help_outline),
+          selectedIcon: Icon(Icons.help),
+          label: 'Guide',
         ),
       ],
     );
@@ -289,8 +318,12 @@ class _BottomNav extends StatelessWidget {
 /// private to one browser on one machine and cannot be found in a file
 /// manager, so anyone treating it as a filing system is heading for a bad day.
 class _SaveIndicator extends StatelessWidget {
-  const _SaveIndicator({required this.app});
+  const _SaveIndicator({required this.app, this.compact = false});
   final AppController app;
+
+  /// Icon only. The words are in the tooltip either way, and 'Saved 14:32' is
+  /// 110px a narrow window does not have.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -340,12 +373,14 @@ class _SaveIndicator extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 16, color: colour),
-            const SizedBox(width: 6),
-            Text(text,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: colour)),
+            if (!compact) ...[
+              const SizedBox(width: 6),
+              Text(text,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: colour)),
+            ],
           ],
         ),
       ),
@@ -392,9 +427,33 @@ class _DisplayButton extends StatelessWidget {
   }
 }
 
+/// The app bar, which has to give things up as the window narrows.
+///
+/// It held nine things at fixed sizes and nothing was allowed to shrink, so
+/// below about 1300px the title painted straight over the filename beside it,
+/// and on a phone the actions overflowed their row. An AppBar hands its title
+/// whatever the actions leave over; a `Text` that cannot ellipse takes the
+/// space anyway and draws on top of its neighbours.
+///
+/// So there are three widths, each giving up the least useful thing first:
+/// the filename (reassurance, not a control), then the button labels, then
+/// Open file, which moves into the overflow menu rather than vanishing.
 class _TopBar extends StatelessWidget implements PreferredSizeWidget {
-  const _TopBar({required this.compact});
-  final bool compact;
+  const _TopBar({required this.width});
+
+  /// The window's width, not a flag: the bar needs the number to work out
+  /// what it can still afford.
+  final double width;
+
+  bool get compact => Breakpoints.isCompact(width);
+
+  /// The filename is the first thing to go. It says which file is open, which
+  /// matters once and then never again in a session.
+  bool get _showFileName => width >= 1320;
+
+  /// Below this, Open file and Download keep their icons and lose their
+  /// words. Both are unmistakable as icons, and both carry a tooltip.
+  bool get _labelled => width >= 1160;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -410,11 +469,20 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
         children: [
           const Icon(Icons.castle_outlined, size: 22),
           const SizedBox(width: 10),
-          Text(compact ? 'Price Explorer' : 'Medieval Price Explorer'),
+          // Flexible and ellipsised, which is the backstop for every width
+          // the branches below do not anticipate. Without it the name
+          // overflows its box and paints over whatever sits beside it.
+          Flexible(
+            child: Text(
+              compact ? 'Price Explorer' : 'Medieval Price Explorer',
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+            ),
+          ),
         ],
       ),
       actions: [
-        if (!compact)
+        if (_showFileName)
           Padding(
             padding: const EdgeInsets.only(right: 4),
             child: Row(
@@ -422,16 +490,23 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                 Icon(Icons.description_outlined,
                     size: 16, color: scheme.onSurfaceVariant),
                 const SizedBox(width: 6),
-                Text(
-                  app.currentFileName ?? '',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                // Capped and ellipsised: these names are long, and every file
+                // the app hands back carries a timestamp on the end of it.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 280),
+                  child: Text(
+                    app.currentFileName ?? '',
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
                 ),
               ],
             ),
           ),
-        _SaveIndicator(app: app),
+        _SaveIndicator(app: app, compact: !_labelled),
         const SizedBox(width: 4),
         _DisplayButton(compact: compact),
         const SizedBox(width: 4),
@@ -447,16 +522,43 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             label: const Text('New entry'),
           ),
         const SizedBox(width: 8),
-        OutlinedButton.icon(
-          onPressed: app.isLoading ? null : () => _openFile(context, app),
-          icon: const Icon(Icons.upload_file_outlined, size: 18),
-          label: const Text('Open file'),
-        ),
+        // On a phone this moves into the overflow menu. It is the action a
+        // reader wants least often and it costs the most width.
+        if (!compact)
+          _labelled
+              ? OutlinedButton.icon(
+                  onPressed:
+                      app.isLoading ? null : () => _openFile(context, app),
+                  icon: const Icon(Icons.upload_file_outlined, size: 18),
+                  label: const Text('Open file'),
+                )
+              : IconButton(
+                  tooltip: 'Open file',
+                  onPressed:
+                      app.isLoading ? null : () => _openFile(context, app),
+                  icon: const Icon(Icons.upload_file_outlined),
+                ),
         const SizedBox(width: 8),
-        FilledButton.icon(
-          onPressed: app.isLoading ? null : () => _download(context, app),
-          icon: const Icon(Icons.download_outlined, size: 18),
-          label: Text(app.isDirty ? 'Download changes' : 'Download a copy'),
+        // Download keeps its filled treatment at every width. Downloading is
+        // the only way work leaves this browser, and the whole storage model
+        // rests on a reader finding it.
+        TourTarget(
+          stop: TourStop.download,
+          child: _labelled
+              ? FilledButton.icon(
+                  onPressed:
+                      app.isLoading ? null : () => _download(context, app),
+                  icon: const Icon(Icons.download_outlined, size: 18),
+                  label: Text(
+                      app.isDirty ? 'Download changes' : 'Download a copy'),
+                )
+              : IconButton.filled(
+                  tooltip:
+                      app.isDirty ? 'Download changes' : 'Download a copy',
+                  onPressed:
+                      app.isLoading ? null : () => _download(context, app),
+                  icon: const Icon(Icons.download_outlined),
+                ),
         ),
         const SizedBox(width: 8),
         PopupMenuButton<_MenuAction>(
@@ -465,6 +567,8 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             switch (action) {
               case _MenuAction.install:
                 promptToInstallApp();
+              case _MenuAction.openFile:
+                _openFile(context, app);
               case _MenuAction.newEntry:
                 _addEntry(context, app);
               case _MenuAction.saveNow:
@@ -489,6 +593,11 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                   // a download, which is the one thing this is not.
                   subtitle: Text('Opens in its own window, and works offline'),
                 ),
+              ),
+            if (compact)
+              const PopupMenuItem(
+                value: _MenuAction.openFile,
+                child: Text('Open a different file'),
               ),
             // Gated with the toolbar button, for the same reason.
             if (context.watch<ViewPreferences>().detailLevel.isEverything)
@@ -575,4 +684,4 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-enum _MenuAction { install, newEntry, saveNow, resetToDefault }
+enum _MenuAction { install, openFile, newEntry, saveNow, resetToDefault }

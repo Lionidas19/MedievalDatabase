@@ -70,10 +70,10 @@ void main() {
   final corpus = _loadCorpus();
 
   test('the corpus is present and complete', () {
-    // 7,800 real entries. The Data sheet runs to 10,379 rows, but 7801 onward
-    // are unfilled template rows carrying only dropdown defaults, and the ETL
-    // skips them.
-    expect(corpus.length, 7800,
+    // 7,501 real entries. The Data sheet runs to 10,379 rows. Two blocks are
+    // skipped on import: 7801 onward, which carry only dropdown defaults, and
+    // entries 7502-7800, which carry a year of 1286 and nothing else at all.
+    expect(corpus.length, 7501,
         reason: 'expected the full database, got ${corpus.length} rows');
   });
 
@@ -135,17 +135,20 @@ void main() {
   });
 
   test('the proportion with no computable price matches the source', () {
-    // 364 of the 7,800 entries cache no pence-per-output-Y. Reproducing that
+    // 65 of the 7,501 entries cache no pence-per-output-Y. Reproducing that
     // exactly is the point: the gap is in the historical record, not in the
     // code.
     //
-    // It was 395 against the August workbook. The 31 that gained an answer
-    // are rows the researcher has since filled in or whose measure lookup the
-    // sheet recalculated, 7292 among them. If this number moves again,
-    // something in the source moved; find out what before changing it.
+    // It has moved twice, and both times for a reason worth recording. 395
+    // against the August workbook; 364 after importing the researcher's
+    // current one, where the sheet had recalculated rows it previously failed
+    // on; 65 once the 299 date-only rows stopped being imported at all, since
+    // every one of those was an entry with nothing to price. If it moves
+    // again, something in the source moved. Find out what before editing
+    // this number.
     final noCachedAnswer =
         corpus.where((r) => r['x_per_y'] == null).length;
-    expect(noCachedAnswer, 364);
+    expect(noCachedAnswer, 65);
 
     final weAlsoHaveNoAnswer = corpus.where((r) {
       if (r['x_per_y'] != null) return false;

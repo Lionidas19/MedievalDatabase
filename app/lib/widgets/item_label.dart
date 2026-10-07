@@ -26,10 +26,19 @@ class ItemLabel extends StatelessWidget {
     this.style,
     this.maxLines = 1,
     this.overflow = TextOverflow.ellipsis,
+    this.emphasise = false,
   });
 
   final PriceEntry entry;
   final TextStyle? style;
+
+  /// Set the specific a size larger as well as bolder.
+  ///
+  /// The researcher asked for bold and "possibly even a larger font size".
+  /// Off in the table, where a taller glyph would change the line height of
+  /// every one of 7,501 rows for the sake of one column; on in the cards and
+  /// the record view, which lay out around their content and have the room.
+  final bool emphasise;
   final int? maxLines;
   final TextOverflow overflow;
 
@@ -64,7 +73,12 @@ class ItemLabel extends StatelessWidget {
             ),
           TextSpan(
             text: subject,
-            style: base.copyWith(fontWeight: FontWeight.w700),
+            style: base.copyWith(
+              fontWeight: FontWeight.w700,
+              fontSize: emphasise
+                  ? (base.fontSize ?? 14) * 1.15
+                  : base.fontSize,
+            ),
           ),
         ],
       ),

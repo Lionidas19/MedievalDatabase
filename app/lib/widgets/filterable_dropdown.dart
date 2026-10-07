@@ -186,3 +186,45 @@ class _FilterableDropdownState<T> extends State<FilterableDropdown<T>> {
     );
   }
 }
+
+/// Options that would find nothing, sent to the bottom and struck through.
+///
+/// Advanced Search has done this since it was written, and the researcher
+/// asked for the same in Data Display: an option that cannot produce a row is
+/// worse than useless, because choosing it looks like the app breaking. So a
+/// dead option is still listed, in its own group at the end, crossed out and
+/// marked `(none)` and disabled.
+///
+/// The current selection stays enabled whatever its count, so nobody is
+/// stranded on a value they cannot leave.
+List<DropdownMenuEntry<T>> facetEntries<T>(
+  BuildContext context, {
+  required List<(T, String)> options,
+  required bool Function(T) available,
+  required T? selected,
+  DropdownMenuEntry<T>? anyOption,
+}) {
+  final live = <DropdownMenuEntry<T>>[];
+  final dead = <DropdownMenuEntry<T>>[];
+  for (final (value, label) in options) {
+    if (available(value) || value == selected) {
+      live.add(DropdownMenuEntry(value: value, label: label));
+    } else {
+      dead.add(
+        DropdownMenuEntry(
+          value: value,
+          label: label,
+          enabled: false,
+          labelWidget: Text(
+            '$label  (none)',
+            style: TextStyle(
+              decoration: TextDecoration.lineThrough,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    }
+  }
+  return [?anyOption, ...live, ...dead];
+}

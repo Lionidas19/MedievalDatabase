@@ -223,4 +223,41 @@ void main() {
       expect(formatPence(null), '—');
     });
   });
+
+  group('a missing price is not a price of nought', () {
+    PriceCalculation run({double? l, double? sh, double? d}) =>
+        calculatePrice(
+          quantities: [const MeasuredQuantity(1, 100)],
+          price: RecordedPrice(pounds: l, shillings: sh, pence: d),
+          valuationMetric: 100,
+          modernPoundsPerPenny: 4.086976,
+        );
+
+    test('inPence still sums blanks as nought, as the spreadsheet does', () {
+      // Not a bug to fix: the cached-calculation oracle is compared against
+      // this, and the sheet's own formula is a plain sum over blank cells.
+      expect(const RecordedPrice().inPence, 0);
+      expect(const RecordedPrice().isAbsent, isTrue);
+      expect(const RecordedPrice(pence: 0).isAbsent, isFalse);
+    });
+
+    test('but the figure the app averages is null', () {
+      // "Recorded unit" is the default output unit, so this value feeds every
+      // median, mean and chart. 66 entries record no price at all, 61 of them
+      // in 1286; counting those as nought dragged the 1286 median to the
+      // floor and drew a chart diving into the axis.
+      expect(run().recordedPricePerUnit, isNull);
+      expect(run().modernPerValuationMeasure, isNull);
+    });
+
+    test('a genuine nought is kept, because the source does say it', () {
+      expect(run(d: 0).recordedPricePerUnit, 0);
+    });
+
+    test('a real price comes through untouched', () {
+      expect(run(sh: 4, d: 4).recordedPricePerUnit, 52);
+      expect(run(sh: 4, d: 4).modernPerValuationMeasure,
+          closeTo(52 * 4.086976, 1e-9));
+    });
+  });
 }

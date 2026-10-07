@@ -106,7 +106,10 @@ class _EntryDetailsDialog extends StatelessWidget {
                 // The item leads, with its specific carrying the weight — it
                 // is what the record is *about*, and a reader should not have
                 // to hunt for it behind a heading that says "Entry 496".
-                ItemLabel(entry: entry, style: theme.textTheme.titleLarge),
+                ItemLabel(
+                    entry: entry,
+                    style: theme.textTheme.titleLarge,
+                    emphasise: true),
                 const SizedBox(height: 2),
                 Text(
                   [
@@ -121,6 +124,16 @@ class _EntryDetailsDialog extends StatelessWidget {
               ],
             ),
           ),
+          // "A button in the top right should be required to allow for
+          // editing mode" — his words, and his placement. It sat in the
+          // footer for a while because it read as a footer action; his
+          // instruction is the one that counts.
+          FilledButton.tonalIcon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.edit_outlined, size: 18),
+            label: const Text('Edit'),
+          ),
+          const SizedBox(width: Spacing.sm),
           IconButton(
             tooltip: 'Close',
             icon: const Icon(Icons.close),
@@ -143,14 +156,7 @@ class _EntryDetailsDialog extends StatelessWidget {
                   color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
           ),
-          const SizedBox(width: Spacing.sm),
-          // Deliberately the only way through to the editor from a tap. It is
-          // a deliberate second act, not something a misplaced click reaches.
-          FilledButton.tonalIcon(
-            onPressed: () => Navigator.pop(context, true),
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            label: const Text('Edit this entry'),
-          ),
+
         ],
       ),
     );
@@ -191,6 +197,7 @@ class _Field extends StatelessWidget {
                 if (column.explanation != null) ...[
                   const SizedBox(width: 4),
                   Tooltip(
+                    constraints: const BoxConstraints(maxWidth: 380),
                     message: column.explanation!,
                     triggerMode: TooltipTriggerMode.tap,
                     showDuration: const Duration(seconds: 12),

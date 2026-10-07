@@ -9,6 +9,9 @@ import '../../state/view_preferences.dart';
 import '../../theme.dart';
 import '../../widgets/autocomplete_field.dart';
 import '../../widgets/filterable_dropdown.dart';
+import '../../widgets/info_dot.dart';
+import '../tour/tour.dart';
+import '../../widgets/price_trend_chart.dart';
 import 'facets.dart';
 import '../advanced/advanced_view.dart' show openEntryEditor;
 
@@ -228,36 +231,22 @@ class _SimpleViewState extends State<SimpleView> {
   /// be a puzzle, where a struck-through name is an answer: the records hold
   /// none of that, here. The current selection always stays selectable, or
   /// narrowing a filter could strand the reader on a value they cannot leave.
+  /// Kept as a wrapper so the six call sites below read the same as before.
+  /// The logic moved to `widgets/filterable_dropdown.dart` when Data Display
+  /// needed it too.
   List<DropdownMenuEntry<T>> _facetEntries<T>({
     required List<(T, String)> options,
     required bool Function(T) available,
     required T? selected,
     DropdownMenuEntry<T>? anyOption,
-  }) {
-    final live = <DropdownMenuEntry<T>>[];
-    final dead = <DropdownMenuEntry<T>>[];
-    for (final (value, label) in options) {
-      if (available(value) || value == selected) {
-        live.add(DropdownMenuEntry(value: value, label: label));
-      } else {
-        dead.add(
-          DropdownMenuEntry(
-            value: value,
-            label: label,
-            enabled: false,
-            labelWidget: Text(
-              '$label  (none)',
-              style: TextStyle(
-                decoration: TextDecoration.lineThrough,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        );
-      }
-    }
-    return [?anyOption, ...live, ...dead];
-  }
+  }) =>
+      facetEntries<T>(
+        context,
+        options: options,
+        available: available,
+        selected: selected,
+        anyOption: anyOption,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -358,6 +347,11 @@ class _SimpleViewState extends State<SimpleView> {
                       ),
                       SizedBox(height: short ? Spacing.md : 20),
 
+                      TourTarget(
+                        stop: TourStop.searchForm,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                       // --- where ---
                       _sentenceRow([
                         const Text('In'),
@@ -444,6 +438,8 @@ class _SimpleViewState extends State<SimpleView> {
                         _yearField(isStart: true, min: minYear, max: maxYear),
                         const Text('and'),
                         _yearField(isStart: false, min: minYear, max: maxYear),
+                        InfoDot(
+                            message: Explain.yearRange, label: 'the years'),
                         if (!isSimple) ...[
                           const Text('at'),
                           _dropdown<String?>(
@@ -481,6 +477,21 @@ class _SimpleViewState extends State<SimpleView> {
                                 ),
                           ),
                         ),
+                      // Sweeping the range rather than typing it. The
+                      // researcher asked for this so the effect of moving the
+                      // dates can be watched rather than recomputed: "so that
+                      // you can very quickly slide the date around to see how
+                      // that changes things".
+                      //
+                      // Divisions fixed to whole years, because a range of
+                      // 21 years has no meaningful fractional position and a
+                      // free slider lands on 1283.4.
+                      _YearSlider(
+                        min: minYear,
+                        max: maxYear,
+                        values: _yearRange!,
+                        onChanged: (r) => setState(() => _yearRange = r),
+                      ),
                       SizedBox(height: gap),
 
                       // --- what ---
@@ -592,13 +603,18 @@ class _SimpleViewState extends State<SimpleView> {
                           ),
                       ]),
                       SizedBox(height: gap),
+                          ],
+                        ),
+                      ),
 
                       // --- in what unit ---
                       // The control this whole rewrite exists to make
                       // possible: the answer is computed per entry in
                       // whichever unit is picked, not read from a fixed
                       // column.
-                      _sentenceRow([
+                      TourTarget(
+                        stop: TourStop.searchUnit,
+                        child: _sentenceRow([
                         const Text('returned value as pence per'),
                         _dropdown<MetricItem?>(
                           width: _fieldWidth,
@@ -626,7 +642,7 @@ class _SimpleViewState extends State<SimpleView> {
                           ),
                           onSelected: (v) => setState(() => _outputUnit = v),
                         ),
-                      ]),
+                      ])),
                       if (!facets.canPriceIn(_outputUnit?.dimension))
                         Padding(
                           padding: const EdgeInsets.only(top: 6, left: 2),
@@ -692,7 +708,9 @@ class _SimpleViewState extends State<SimpleView> {
                             label: const Text('Clear'),
                           ),
                           const SizedBox(width: Spacing.sm),
-                          FilledButton.icon(
+                          TourTarget(
+                            stop: TourStop.searchGenerate,
+                            child: FilledButton.icon(
                             onPressed: _category == null
                                 ? null
                                 : () {
@@ -715,7 +733,7 @@ class _SimpleViewState extends State<SimpleView> {
                                   },
                             icon: const Icon(Icons.auto_awesome, size: 18),
                             label: const Text('Generate results'),
-                          ),
+                          )),
                         ],
                       ),
                     ],
@@ -951,7 +969,7 @@ class _ResultCard extends StatelessWidget {
         modernPoundsPerPenny: modern[e.year],
       );
       final v = (query.outputUnit?.isRecordedUnit ?? false)
-          ? calc.priceInPence
+          ? calc.recordedPricePerUnit
           : calc.pencePerOutputY;
       if (v == null || !v.isFinite) {
         unpriced++;
@@ -965,6 +983,24 @@ class _ResultCard extends StatelessWidget {
     }
     final values = priced.map((p) => p.$2).toList()..sort();
     modernValues.sort();
+
+    // One median per year, for the chart. Built from the same priced list so
+    // the line can never disagree with the figure above it.
+    final byYear = <int, List<double>>{};
+    for (final (entry, value) in priced) {
+      final year = entry.year;
+      if (year == null) continue;
+      byYear.putIfAbsent(year, () => []).add(value);
+    }
+    final trend = <YearPoint>[];
+    for (final year in byYear.keys.toList()..sort()) {
+      final v = byYear[year]!..sort();
+      trend.add(YearPoint(
+        year: year,
+        median: v[v.length ~/ 2],
+        count: v.length,
+      ));
+    }
     // Lower case in a sentence: "1.6 pence per recorded unit" reads as
     // English, "per Recorded unit" reads as a variable name.
     final unitName = (query.outputUnit?.isRecordedUnit ?? false)
@@ -1026,6 +1062,23 @@ class _ResultCard extends StatelessWidget {
             if (level.isEverything && values.isNotEmpty) ...[
               const SizedBox(height: Spacing.md),
               _Spread(values: values, unitName: unitName),
+            ],
+            // How the price moved across the years asked for. New in response
+            // to the researcher: "set a year range and it could display the
+            // information over time as a line graph".
+            if (trend.length >= 2) ...[
+              const SizedBox(height: Spacing.lg),
+              Row(
+                children: [
+                  Expanded(
+                    child: PriceTrendChart(
+                      points: trend,
+                      unitName: unitName,
+                    ),
+                  ),
+                  InfoDot(message: Explain.graph, label: 'this chart'),
+                ],
+              ),
             ],
             // Priced by each entry's own measure, an average here adds
             // quarters to days to stones. Every individual figure is sound;
@@ -1281,6 +1334,58 @@ class _EntryTile extends StatelessWidget {
       ),
       trailing: const Icon(Icons.chevron_right, size: 18),
       onTap: () => openEntryEditor(context, entry),
+    );
+  }
+}
+
+/// The year range, swept rather than typed.
+class _YearSlider extends StatelessWidget {
+  const _YearSlider({
+    required this.min,
+    required this.max,
+    required this.values,
+    required this.onChanged,
+  });
+
+  final int min;
+  final int max;
+  final RangeValues values;
+  final ValueChanged<RangeValues> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(left: Spacing.sm, right: Spacing.sm),
+      child: Row(
+        children: [
+          Text('$min',
+              style: theme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontFeatures: const [tabularFigures])),
+          Expanded(
+            child: RangeSlider(
+              min: min.toDouble(),
+              max: max.toDouble(),
+              divisions: max - min,
+              values: values,
+              labels: RangeLabels(
+                '${values.start.round()}',
+                '${values.end.round()}',
+              ),
+              onChanged: (r) => onChanged(RangeValues(
+                r.start.roundToDouble(),
+                r.end.roundToDouble(),
+              )),
+            ),
+          ),
+          Text('$max',
+              style: theme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontFeatures: const [tabularFigures])),
+        ],
+      ),
     );
   }
 }

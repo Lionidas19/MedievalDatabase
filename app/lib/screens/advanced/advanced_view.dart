@@ -231,7 +231,7 @@ class _AdvancedViewState extends State<AdvancedView> {
         entry: e,
         calc: calc,
         perUnit: recorded
-            ? calc.priceInPence
+            ? calc.recordedPricePerUnit
             : (comparable ? calc.pencePerOutputY : null),
         comparable: comparable,
       ));
@@ -442,6 +442,8 @@ class _AdvancedViewState extends State<AdvancedView> {
           onReset: () => _resetEverything(prefs, minYear, maxYear),
           estimateCount: _estimateCount,
           dense: short,
+          compact: compact,
+          entries: app.entries,
           stats: _stats,
           statsWithEstimates: _statsWithEstimates,
           brief: narrow,
@@ -642,7 +644,7 @@ class _EntryCard extends StatelessWidget {
         // and the price it fetched sits beside it.
         title: Row(
           children: [
-            Flexible(child: ItemLabel(entry: e)),
+            Flexible(child: ItemLabel(entry: e, emphasise: true)),
             Text(' — ${e.priceLabel}'),
           ],
         ),

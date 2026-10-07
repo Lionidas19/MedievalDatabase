@@ -8,6 +8,7 @@ import '../../services/pricing.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
 import '../../widgets/autocomplete_field.dart';
+import '../../widgets/info_dot.dart';
 
 /// Opens the edit dialog and returns the saved entry, or null if cancelled.
 Future<PriceEntry?> showEditEntryDialog(
@@ -675,22 +676,30 @@ class _RecordedDate extends StatelessWidget {
             ? '$julian in the Julian calendar the accounts use, which is '
                 '${julianToGregorian(julian)} by modern reckoning.'
             : '$julian in the Julian calendar the accounts use.';
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.event_outlined, size: 14, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(text,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: scheme.onSurfaceVariant)),
+
+    // Behind a (?) rather than printed under the date fields.
+    //
+    // The researcher asked for this specifically: "Like the michaelmas stuff,
+    // that's important information but it can almost certainly exist behind
+    // an (i)". As a permanent three-line paragraph it pushed the rest of the
+    // form down and was read once and then ignored.
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(Icons.event_outlined, size: 15, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(
+            julian == null
+                ? 'Shown as the source records them'
+                : '$julian',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
           ),
-        ],
-      ),
+        ),
+        InfoDot(message: text, label: 'how these years are counted'),
+      ],
     );
   }
 }

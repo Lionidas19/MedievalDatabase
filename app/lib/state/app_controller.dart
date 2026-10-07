@@ -9,7 +9,12 @@ import '../services/file_io.dart';
 import '../services/local_store.dart';
 import '../services/sqlite_service.dart';
 
-enum ViewMode { simple, advanced }
+/// Which of the three screens is on show.
+///
+/// `guide` is last so the two working screens keep their indices in the
+/// `IndexedStack`, and because the rail reads better with it at the bottom:
+/// it is where you go when you are stuck, not where you start.
+enum ViewMode { simple, advanced, guide }
 
 /// How the working copy is doing in private browser storage.
 enum LocalSaveState {

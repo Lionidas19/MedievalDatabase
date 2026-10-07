@@ -9,6 +9,9 @@ import '../../services/statistics.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
 import '../../widgets/filterable_dropdown.dart';
+import '../simple/facets.dart';
+import '../../widgets/info_dot.dart';
+import '../tour/tour.dart';
 
 /// Roughly a quarter of the database had no year at all when this filter was
 /// written. The year slider alone cannot express "show me those", and worse,
@@ -78,15 +81,22 @@ class FilterState {
     }
   }
 
-  bool matches(PriceEntry e) {
+  /// The free-text half of [matches], on its own.
+  ///
+  /// Facet counting needs the filters that are *not* facet axes applied
+  /// first, then lets `countFacets` handle county, category and the years.
+  bool passesSearch(PriceEntry e) {
     final q = search.trim().toLowerCase();
-    if (q.isNotEmpty) {
-      final hay = [
-        e.locality, e.county, e.category, e.subcategory, e.specific,
-        e.statusInfo, e.information, e.sourceCitation, e.food,
-      ].where((s) => s != null).join(' ').toLowerCase();
-      if (!hay.contains(q)) return false;
-    }
+    if (q.isEmpty) return true;
+    final hay = [
+      e.locality, e.county, e.category, e.subcategory, e.specific,
+      e.statusInfo, e.information, e.sourceCitation, e.food,
+    ].where((s) => s != null).join(' ').toLowerCase();
+    return hay.contains(q);
+  }
+
+  bool matches(PriceEntry e) {
+    if (!passesSearch(e)) return false;
     if (!passesDate(e)) return false;
     if (county != null && e.county != county) return false;
     if (category != null && e.category != category) return false;
@@ -131,6 +141,8 @@ class FilterBar extends StatefulWidget {
     required this.onEstimatingChanged,
     required this.estimateCount,
     required this.dense,
+    required this.compact,
+    required this.entries,
     required this.stats,
     required this.statsWithEstimates,
     required this.brief,
@@ -159,6 +171,26 @@ class FilterBar extends StatefulWidget {
 
   /// Squeeze the toolbar onto one row.
   ///
+  /// Every entry in the database, for counting what each option would find.
+  ///
+  /// The bar needs the records themselves, not just how many survived: a
+  /// dropdown can only strike out an option by asking what choosing it would
+  /// return.
+  final List<PriceEntry> entries;
+
+  /// Set on a phone, where the toolbar was taking most of the page.
+  ///
+  /// At 412x870 the six controls stacked into five rows and the figures panel
+  /// sat under them, leaving about two records visible above the bottom
+  /// navigation. A toolbar that large is not a toolbar, it is the screen.
+  ///
+  /// So on a phone the bar is one row: the search box, and a Filters button
+  /// that opens everything else. Price per, Group, Estimates and Reset move
+  /// inside that panel, where they are still one tap away and cost nothing
+  /// while they are not in use. The figures stay out, on one line, because
+  /// they are the answer rather than a control.
+  final bool compact;
+
   /// Set on short screens, where the detail chips are dropped in favour of the
   /// same control in the toolbar above — it is the one thing here that is
   /// duplicated, so it is the one thing worth losing to buy back a row of
@@ -229,6 +261,47 @@ class _FilterBarState extends State<FilterBar> {
         () => widget.onFiltersChanged(_f.copyWith(search: value)));
   }
 
+  /// What each option would still find, memoised.
+  ///
+  /// `countFacets` walks every entry, and this bar rebuilds on every
+  /// keystroke in the search box, so the answer is cached against the filters
+  /// that can change it. Search text and the dated/undated choice are not
+  /// facets `countFacets` models, so they are applied first and it counts
+  /// over what is left; county, category and the year range are the axes it
+  /// takes care of itself.
+  String? _facetKey;
+  FacetCounts _facetCounts = FacetCounts.empty;
+
+  FacetCounts _countFacets() {
+    final years = _f.years ??
+        RangeValues(widget.minYear.toDouble(), widget.maxYear.toDouble());
+    final key = [
+      widget.entries.length,
+      _f.search,
+      _f.county,
+      _f.category,
+      _f.dateFilter.name,
+      years.start,
+      years.end,
+    ].join('|');
+    if (key == _facetKey) return _facetCounts;
+
+    final searched = widget.entries
+        .where((e) => _f.passesDate(e) && _f.passesSearch(e))
+        .toList();
+    _facetCounts = countFacets(
+      searched,
+      FacetQuery(
+        startYear: years.start,
+        endYear: years.end,
+        county: _f.county,
+        category: _f.category,
+      ),
+    );
+    _facetKey = key;
+    return _facetCounts;
+  }
+
   @override
   Widget build(BuildContext context) {
     final prefs = context.watch<ViewPreferences>();
@@ -253,7 +326,11 @@ class _FilterBarState extends State<FilterBar> {
           // One Wrap rather than two rows when space is short: the controls
           // then flow together and take a single line wherever they fit.
           _topRow(context, scheme, active, prefs),
-          if (!widget.dense) ...[
+          if (widget.compact) ...[
+            const SizedBox(height: Spacing.sm),
+            TourTarget(stop: TourStop.figures, child: _figures(context)),
+          ],
+          if (!widget.dense && !widget.compact) ...[
             SizedBox(height: gap),
             _levelRow(context, prefs),
           ],
@@ -272,12 +349,54 @@ class _FilterBarState extends State<FilterBar> {
 
   Widget _topRow(BuildContext context, ColorScheme scheme, int active,
       ViewPreferences prefs) {
+    // One row on a phone: everything the reader is not using right now is
+    // behind the Filters button, which says how much of it is in play.
+    if (widget.compact) {
+      return Row(
+        children: [
+          Expanded(
+            child: TourTarget(
+              stop: TourStop.search,
+              child: TextField(
+                controller: _searchController,
+                onChanged: _onSearchChanged,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search, size: 20),
+                  hintText: 'Search',
+                  isDense: true,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: Spacing.sm),
+          TourTarget(
+            stop: TourStop.filters,
+            child: Badge(
+              // The count has to be on the button itself: with the panel
+              // shut, nothing else on the screen says a filter is narrowing
+              // what the reader is looking at.
+              isLabelVisible: active > 0,
+              label: Text('$active'),
+              child: IconButton.filledTonal(
+                tooltip: _expanded ? 'Hide filters' : 'Filters and options',
+                onPressed: () => setState(() => _expanded = !_expanded),
+                icon: Icon(
+                    _expanded ? Icons.expand_less : Icons.tune, size: 20),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
       spacing: Spacing.md,
       runSpacing: Spacing.sm,
       children: [
-        SizedBox(
+        TourTarget(
+          stop: TourStop.search,
+          child: SizedBox(
           width: 260,
           child: TextField(
             controller: _searchController,
@@ -288,7 +407,7 @@ class _FilterBarState extends State<FilterBar> {
               isDense: true,
             ),
           ),
-        ),
+        )),
         // The same typing-aware dropdown the Specifics lookup uses.
         //
         // As a bare DropdownMenu this was the single worst control in the
@@ -298,28 +417,17 @@ class _FilterBarState extends State<FilterBar> {
         // still showing everything, and no idea how to get back. Filtering
         // and select-on-focus are what fix that, and both live in the shared
         // widget.
-        FilterableDropdown<MetricItem?>(
-          width: 230,
-          value: widget.outputUnit,
-          label: 'Price per',
-          hint: 'type a unit',
-          entries: [
-            for (final u in widget.outputUnits)
-              DropdownMenuEntry(
-                value: u,
-                label: u.dimension == null
-                    ? u.name
-                    : '${u.name}  (${u.dimension})',
-              ),
-          ],
-          onSelected: widget.onOutputUnitChanged,
-        ),
-        OutlinedButton.icon(
-          onPressed: () => setState(() => _expanded = !_expanded),
-          icon: Icon(
-              _expanded ? Icons.expand_less : Icons.filter_alt_outlined,
-              size: 18),
-          label: Text(active == 0 ? 'Filters' : 'Filters ($active)'),
+        InfoDot(message: Explain.pricePer, label: 'Price per'),
+        _pricePerField(context),
+        TourTarget(
+          stop: TourStop.filters,
+          child: OutlinedButton.icon(
+            onPressed: () => setState(() => _expanded = !_expanded),
+            icon: Icon(
+                _expanded ? Icons.expand_less : Icons.filter_alt_outlined,
+                size: 18),
+            label: Text(active == 0 ? 'Filters' : 'Filters ($active)'),
+          ),
         ),
         Text(
           // 'of 7800 entries' is worth its width when there is width to
@@ -337,7 +445,7 @@ class _FilterBarState extends State<FilterBar> {
         // carries that choice.
         if (widget.dense) ...[
           _estimateChip(context),
-          _groupMenu(context, prefs),
+          _groupMenu(context, prefs: prefs),
         ],
         // Shown even when there is nothing to average.
         //
@@ -351,7 +459,8 @@ class _FilterBarState extends State<FilterBar> {
           icon: const Icon(Icons.restart_alt, size: 18),
           label: const Text('Reset'),
         ),
-        _figures(context),
+        InfoDot(message: Explain.reset, label: 'Reset'),
+        TourTarget(stop: TourStop.figures, child: _figures(context)),
       ],
     );
   }
@@ -360,25 +469,62 @@ class _FilterBarState extends State<FilterBar> {
   ///
   /// Median leads and is set heavier: with a mean of 253 against a median of
   /// 0.19, leading with the mean would be leading with the wrong number.
+  /// The figures, built to be noticed.
+  ///
+  /// They were a grey run of small text under the toolbar, and in observed
+  /// testing people who had just generated them "genuinely did not recall
+  /// seeing the averages at all". The researcher's words were that these
+  /// should be "much more visually distinct, arguably the first thing they
+  /// should see".
+  ///
+  /// So: a tinted panel of its own, the median set large and in the accent
+  /// colour, the rest beside it in a size that still reads as a number rather
+  /// than a caption. The median leads because with a mean of 253 against a
+  /// median of 0.19, leading with the mean would be leading with the wrong
+  /// number.
   Widget _figures(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final theme = Theme.of(context).textTheme;
+    final recorded = widget.outputUnit?.isRecordedUnit ?? false;
 
-    Widget one(String label, double? value, {bool lead = false}) => Padding(
+    Widget one(String label, double? value) => Padding(
           padding: const EdgeInsets.only(right: Spacing.md),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
             children: [
-              Text('$label ',
-                  style:
-                      theme.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+              Text(label,
+                  style: theme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      letterSpacing: 0.4)),
               Text(
                 formatPence(value),
-                style: (lead ? theme.titleSmall : theme.bodyMedium)?.copyWith(
+                style: theme.titleSmall?.copyWith(
                   fontFeatures: const [tabularFigures],
-                  fontWeight: lead ? FontWeight.w700 : FontWeight.w500,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        );
+
+    Widget headline(PriceStats s) => Padding(
+          padding: const EdgeInsets.only(right: Spacing.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('MEDIAN',
+                  style: theme.labelSmall?.copyWith(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8)),
+              Text(
+                formatPence(s.median),
+                style: theme.headlineSmall?.copyWith(
+                  color: scheme.primary,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const [tabularFigures],
                 ),
               ),
             ],
@@ -387,86 +533,83 @@ class _FilterBarState extends State<FilterBar> {
 
     Widget group(PriceStats s, {String? prefix}) => Row(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             if (prefix != null)
               Padding(
-                padding: const EdgeInsets.only(right: Spacing.sm),
+                padding: const EdgeInsets.only(right: Spacing.sm, bottom: 2),
                 child: Text(prefix,
                     style: theme.labelMedium
                         ?.copyWith(color: scheme.onSurfaceVariant)),
               ),
-            one('median', s.median, lead: true),
+            headline(s),
             one('mean', s.mean),
-            one('mode', s.mode),
-            if (!widget.brief) one('lowest', s.lowest),
-            if (!widget.brief) one('highest', s.highest),
-            // Priced by each entry's own measure, these figures average
-            // quarters against days against stones. The per-row answers are
-            // sound; a median across them is not, and saying so is the only
-            // honest way to show them at all.
-            if (!s.isEmpty && (widget.outputUnit?.isRecordedUnit ?? false))
-              Flexible(
-                child: Text(
-                  'across mixed measures',
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.bodySmall?.copyWith(color: scheme.error),
-                ),
-              )
-            else if (s.isEmpty)
-              Flexible(
-                child: Text(
-                  'none of these can be priced per '
-                  '${widget.outputUnit?.name ?? 'that unit'}',
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.bodySmall?.copyWith(color: scheme.error),
-                ),
-              )
-            else
-              Text('of ${s.count}',
-                  style: theme.bodySmall
-                      ?.copyWith(color: scheme.onSurfaceVariant)),
+            // A phone gets the median, the mean and the sample size. Five
+            // figures across 380px wrap onto three lines and the panel then
+            // costs more height than the records it is describing.
+            if (!widget.compact) one('mode', s.mode),
+            if (!widget.brief && !widget.compact) one('lowest', s.lowest),
+            if (!widget.brief && !widget.compact) one('highest', s.highest),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: s.isEmpty
+                  ? Flexible(
+                      child: Text(
+                        'none of these can be priced per '
+                        '${widget.outputUnit?.name ?? 'that unit'}',
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.bodySmall?.copyWith(color: scheme.error),
+                      ),
+                    )
+                  : Text('of ${s.count}',
+                      style: theme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant)),
+            ),
           ],
         );
 
     final withEstimates = widget.statsWithEstimates;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          margin: const EdgeInsets.only(right: Spacing.md),
-          height: 26,
-          width: 1,
-          color: scheme.outlineVariant,
-        ),
-        Tooltip(
-          message: (widget.outputUnit?.isRecordedUnit ?? false)
-              ? 'Each entry is priced by the measure the source used for it, '
-                  'so these figures average different measures together. Use '
-                  'them to see the shape of the selection, not to compare one '
-                  'record with another. Pick a single unit at Price per for '
-                  'figures that can be compared.'
-              : withEstimates == null
-              ? 'Across every entry these filters left that the source can '
-                  'price, in the unit chosen at Price per.'
-              : 'The upper figures count only prices the source records. The '
-                  'lower ones also count the estimates, which are guesses '
-                  'fitted from neighbouring years.',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: Spacing.md, vertical: Spacing.sm),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              group(widget.stats, prefix: withEstimates == null ? null : 'recorded'),
-              if (withEstimates != null)
-                group(withEstimates, prefix: 'with estimates'),
+              Flexible(
+                child: group(widget.stats,
+                    prefix: withEstimates == null ? null : 'recorded'),
+              ),
+              InfoDot(message: Explain.figures, label: 'these figures'),
             ],
           ),
-        ),
-      ],
+          if (withEstimates != null) group(withEstimates, prefix: 'with estimates'),
+          // Priced by each entry's own measure, these figures average
+          // quarters against days against stones. Each row is sound on its
+          // own; a median across them is not, and saying so is the only
+          // honest way to show them at all.
+          if (recorded && !widget.stats.isEmpty)
+            Text(
+              'across mixed measures, so compare with care',
+              style: theme.bodySmall?.copyWith(color: scheme.error),
+            ),
+        ],
+      ),
     );
   }
 
   Widget _levelRow(BuildContext context, ViewPreferences prefs) {
-    return Wrap(
+    return TourTarget(
+      stop: TourStop.detailLevels,
+      child: Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
       spacing: Spacing.md,
       runSpacing: Spacing.sm,
@@ -474,6 +617,7 @@ class _FilterBarState extends State<FilterBar> {
         Text('Show', style: Theme.of(context).textTheme.labelLarge),
         for (final level in DetailLevel.values)
           Tooltip(
+            constraints: const BoxConstraints(maxWidth: 380),
             message: level.description,
             child: ChoiceChip(
               label: Text(level.label),
@@ -485,9 +629,9 @@ class _FilterBarState extends State<FilterBar> {
         const SizedBox(width: Spacing.sm),
         _estimateChip(context),
         const SizedBox(width: Spacing.sm),
-        _groupMenu(context, prefs),
+        _groupMenu(context, prefs: prefs),
       ],
-    );
+    ));
   }
 
   /// Deliberately a chip rather than one of the detail levels: those choose how
@@ -495,6 +639,7 @@ class _FilterBarState extends State<FilterBar> {
   /// contain, and the two should not look alike.
   Widget _estimateChip(BuildContext context) {
     return Tooltip(
+          constraints: const BoxConstraints(maxWidth: 380),
           message: widget.estimating
               ? 'Empty prices are filled with a guess from the trend across '
                   'neighbouring years, shown in italics with a tilde. No '
@@ -518,26 +663,57 @@ class _FilterBarState extends State<FilterBar> {
         );
   }
 
-  Widget _groupMenu(BuildContext context, ViewPreferences prefs) {
+  /// The output unit. One definition, used by the bar and by the phone's
+  /// filter panel, so the two can never drift apart.
+  Widget _pricePerField(BuildContext context) {
+    return TourTarget(
+      stop: TourStop.pricePer,
+      child: FilterableDropdown<MetricItem?>(
+        width: 230,
+        value: widget.outputUnit,
+        label: 'Price per',
+        hint: 'type a unit',
+        // Struck out when the records in front of the reader cannot be
+        // expressed in it. This is the control people said they did not
+        // understand, and the honest answer to "what does it change" is to
+        // show which of the 500 units this selection can actually answer in:
+        // labour counted by the day can never be priced by the metre.
+        entries: facetEntries<MetricItem?>(
+          context,
+          options: [
+            for (final u in widget.outputUnits)
+              (
+                u,
+                u.dimension == null ? u.name : '${u.name}  (${u.dimension})',
+              ),
+          ],
+          available: (u) => _countFacets().canPriceIn(u?.dimension),
+          selected: widget.outputUnit,
+        ),
+        onSelected: widget.onOutputUnitChanged,
+      ),
+    );
+  }
+
+  Widget _groupMenu(BuildContext context, {required ViewPreferences prefs}) {
     // Narrower where the row has to hold everything at once. The labels still
     // fit; it is the empty half of the box that goes.
     final width = widget.dense ? 168.0 : 220.0;
-    return SizedBox(
+    return FilterableDropdown<GroupBy>(
       width: width,
-      child: DropdownMenu<GroupBy>(
-        width: width,
-        label: const Text('Group'),
-        initialSelection: prefs.groupBy,
-        onSelected: (v) => prefs.groupBy = v ?? GroupBy.none,
-        dropdownMenuEntries: GroupBy.values
-            .map((g) => DropdownMenuEntry(value: g, label: g.label))
-            .toList(),
-      ),
+      label: 'Group',
+      hint: 'how to gather rows',
+      value: prefs.groupBy,
+      onSelected: (v) => prefs.groupBy = v,
+      entries: GroupBy.values
+          .map((g) => DropdownMenuEntry(value: g, label: g.label))
+          .toList(),
     );
   }
 
   Widget _facets(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final counts = _countFacets();
     final years = _f.years ??
         RangeValues(widget.minYear.toDouble(), widget.maxYear.toDouble());
 
@@ -553,54 +729,84 @@ class _FilterBarState extends State<FilterBar> {
         spacing: Spacing.md,
         runSpacing: Spacing.md,
         children: [
-          SizedBox(
+          // On a phone these four live here rather than on the bar. They are
+          // the same widgets, so nothing about them has to be maintained
+          // twice.
+          if (widget.compact) ...[
+            SizedBox(
+              width: double.infinity,
+              child: Text(
+                '${widget.resultCount} of ${widget.totalCount} entries',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontFeatures: const [tabularFigures],
+                ),
+              ),
+            ),
+            _pricePerField(context),
+            _groupMenu(context, prefs: context.watch<ViewPreferences>()),
+            _estimateChip(context),
+            TextButton.icon(
+              onPressed: widget.onReset,
+              icon: const Icon(Icons.restart_alt, size: 18),
+              label: const Text('Reset'),
+            ),
+          ],
+          // Counted against every other filter but not against themselves,
+          // which is what makes a facet a facet: choosing Cornwall should
+          // still leave every county on offer, each marked with whether it
+          // has anything under the rest of the filters.
+          FilterableDropdown<String?>(
             width: 210,
-            child: DropdownMenu<String?>(
-              width: 210,
-              label: const Text('County'),
-              initialSelection: _f.county,
-              onSelected: (v) => widget.onFiltersChanged(
-                  v == null ? _f.copyWith(clearCounty: true) : _f.copyWith(county: v)),
-              dropdownMenuEntries: [
-                const DropdownMenuEntry(value: null, label: 'Any county'),
-                ...widget.counties
-                    .map((c) => DropdownMenuEntry(value: c, label: c)),
-              ],
+            label: 'County',
+            hint: 'type a county',
+            value: _f.county,
+            onSelected: (v) => widget.onFiltersChanged(v == null
+                ? _f.copyWith(clearCounty: true)
+                : _f.copyWith(county: v)),
+            entries: facetEntries<String?>(
+              context,
+              anyOption: const DropdownMenuEntry(
+                  value: null, label: 'Any county'),
+              options: [for (final c in widget.counties) (c, c)],
+              available: (c) => counts.counties.containsKey(c),
+              selected: _f.county,
             ),
           ),
-          SizedBox(
-            width: 190,
-            child: DropdownMenu<String?>(
-              width: 190,
-              label: const Text('Category'),
-              initialSelection: _f.category,
-              onSelected: (v) => widget.onFiltersChanged(v == null
-                  ? _f.copyWith(clearCategory: true)
-                  : _f.copyWith(category: v)),
-              dropdownMenuEntries: [
-                const DropdownMenuEntry(value: null, label: 'Any category'),
-                ...widget.categories
-                    .map((c) => DropdownMenuEntry(value: c, label: c)),
-              ],
+          FilterableDropdown<String?>(
+            // Wide enough for 'Agricultural Labour', which at 190 was
+            // scrolled sideways in the box and read as a truncated word.
+            width: 230,
+            label: 'Category',
+            hint: 'type a category',
+            value: _f.category,
+            onSelected: (v) => widget.onFiltersChanged(v == null
+                ? _f.copyWith(clearCategory: true)
+                : _f.copyWith(category: v)),
+            entries: facetEntries<String?>(
+              context,
+              anyOption: const DropdownMenuEntry(
+                  value: null, label: 'Any category'),
+              options: [for (final c in widget.categories) (c, c)],
+              available: (c) => counts.categories.containsKey(c),
+              selected: _f.category,
             ),
           ),
-          SizedBox(
+          FilterableDropdown<DateFilter>(
             width: 210,
-            child: DropdownMenu<DateFilter>(
-              width: 210,
-              label: const Text('Dates'),
-              initialSelection: _f.dateFilter,
-              onSelected: (v) => widget.onFiltersChanged(
-                  _f.copyWith(dateFilter: v ?? DateFilter.any)),
-              dropdownMenuEntries: DateFilter.values
-                  .map((d) => DropdownMenuEntry(
-                        value: d,
-                        label: d == DateFilter.undated
-                            ? '${d.label} (${widget.undatedTotal})'
-                            : d.label,
-                      ))
-                  .toList(),
-            ),
+            label: 'Dates',
+            hint: 'dated, undated or both',
+            value: _f.dateFilter,
+            onSelected: (v) =>
+                widget.onFiltersChanged(_f.copyWith(dateFilter: v)),
+            entries: DateFilter.values
+                .map((d) => DropdownMenuEntry(
+                      value: d,
+                      label: d == DateFilter.undated
+                          ? '${d.label} (${widget.undatedTotal})'
+                          : d.label,
+                    ))
+                .toList(),
           ),
           SizedBox(
             width: 280,

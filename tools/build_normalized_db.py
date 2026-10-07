@@ -773,6 +773,15 @@ def check_data_headers():
 
 check_data_headers()
 
+# What makes a row worth importing. Year is NOT in here: a row whose only
+# content is a date is an empty row somebody tabbed through, not a record.
+CONTENT_COLUMNS = (
+    "Region", "Category", "Subcategory", "Specifics",
+    "UNIT 1", "UNIT 2", "UNIT 3", "Multiplier/Workers",
+    "Pounds", "Shillings", "Pence", "Status/Info", "Food",
+    "Information", "Page", "Month", "Day",
+)
+
 # Derived column -> the name it gets in excel_cached_calculations.
 CACHED = [
     ("Total Grams", "total_grams"),
@@ -796,18 +805,29 @@ for r, values in rows_of("Data", DATA_FIRST_ROW, DATA_LAST_ROW):
     if entry_no is None:
         continue
 
-    # Rows 7801-10379 of the Data sheet are unfilled template rows: the
-    # dropdowns still hold their default ('Heads/Units' in all four unit
-    # columns, 'UK' for country) but nothing was ever recorded against them.
-    # Importing them would inflate every count in the app by a third and make
-    # 'Heads/Units' look like the most-used measure in the database. Skipped,
-    # and reported at the end so the number is never silently assumed.
-    if not any(as_text(v(c)) is not None for c in (
-            "Year", "Region", "Category", "Subcategory", "Specifics",
-            "UNIT 1", "UNIT 2", "UNIT 3", "Multiplier/Workers",
-            "Pounds", "Shillings", "Pence", "Status/Info", "Food",
-            "Information", "Page", "Month", "Day")):
-        stats["blank template rows skipped"] += 1
+    # Two kinds of row carry nothing worth importing, and they differ only
+    # in whether somebody happened to stamp a year on them.
+    #
+    # Rows 7801-10379 are unfilled template rows: the dropdowns still hold
+    # their defaults ('Heads/Units' in all four unit columns, 'UK' for
+    # country) but nothing was ever recorded against them. Importing them
+    # would inflate every count in the app by a third and make 'Heads/Units'
+    # look like the most-used measure in the database.
+    #
+    # Entries 7502-7800 are the same rows with a date on them: 1286 and not
+    # one other fact, not a place, not a price, not even an item. They did
+    # reach the app, as 299 rows of dashes a reader could sort into and
+    # scroll through, and they are why it claimed 7,800 entries while 7,501
+    # said anything. The researcher confirmed they can go.
+    #
+    # Country, Source and the measure dropdowns are deliberately absent from
+    # the test below. The sheet stamps them on blank rows by default, so
+    # counting them as content would make every empty row look occupied.
+    if not any(as_text(v(c)) is not None for c in CONTENT_COLUMNS):
+        if as_text(v("Year")) is None:
+            stats["blank template rows skipped"] += 1
+        else:
+            stats["rows carrying a date and nothing else, skipped"] += 1
         blank_rows.append(int(entry_no))
         continue
 
