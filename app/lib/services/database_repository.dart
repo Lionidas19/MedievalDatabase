@@ -245,6 +245,46 @@ class DatabaseRepository {
       .map((r) => LookupItem(r['county_id'] as String, r['name'] as String))
       .toList());
 
+  /// The counties a *filter* should offer: one per bare name.
+  ///
+  /// The id is the bare name rather than a county_id, because several real
+  /// counties can share one option and no single id stands for the group.
+  /// Nothing is ever saved from here; see [bareCountyName].
+  List<LookupItem> get filterCounties => _cached('filterCounties', () {
+        final byName = <String, LookupItem>{};
+        for (final c in counties) {
+          final bare = bareCountyName(c.label);
+          byName.putIfAbsent(bare, () => LookupItem(bare, bare));
+        }
+        return byName.values.toList()
+          ..sort((a, b) => a.label.compareTo(b.label));
+      });
+
+  /// Localities in every county of this bare name, hedged or not.
+  ///
+  /// Matched in Dart against the cached county list rather than in SQL,
+  /// because the hedge contains a question mark and the driver's parameter
+  /// binding is not something to play games with.
+  List<LookupItem> localitiesInCounty(String? bareName) {
+    if (bareName == null) return localities();
+    return _cached('localitiesIn:$bareName', () {
+      final ids = counties
+          .where((c) => bareCountyName(c.label) == bareName)
+          .map((c) => c.id)
+          .toList();
+      if (ids.isEmpty) return const <LookupItem>[];
+      final marks = List.filled(ids.length, '?').join(',');
+      return _db
+          .select(
+              'SELECT place_id, locality FROM places WHERE county_id IN '
+              '($marks) ORDER BY locality',
+              ids)
+          .map((r) =>
+              LookupItem(r['place_id'] as String, r['locality'] as String))
+          .toList();
+    });
+  }
+
   List<LookupItem> places({String? countyId}) =>
       _cached('places:$countyId', () => _places(countyId));
 

@@ -281,19 +281,33 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
       id: 'perUnit',
       label: 'Pence per $unitName',
       sortKey: (p) => p.perUnit,
-      width: 190,
+      // 'Pence per comparable unit' is the longest heading this column takes,
+      // and it has to fit its info button and sort arrow beside it.
+      width: 230,
       numeric: true,
       startsGroup: true,
-      explanation: unitName == 'recorded unit'
-          ? 'What one of whatever the source measured this by actually cost. '
-              'Each row is priced by its own measure, named in the tooltip on '
-              'the figure, so every entry with a price has an answer here. '
-              'Because the measures differ from row to row, pick a single '
-              'unit at "Price per" before comparing one row against another.'
-          : 'The headline figure: pence per $unitName, worked out for '
-              'this entry rather than stored. Choose a different unit with '
-              '"Price per" above the table. A figure shown as "~ 0.19" is an '
-              'estimate from neighbouring years, never a record.',
+      explanation: unitName == 'comparable unit'
+          ? 'The headline figure, worked out for this entry rather than '
+              'stored. Everything sold by weight is priced per kilogram, '
+              'everything counted per head, everything by volume per litre '
+              'and everything by length per metre, so two rows of the same '
+              'kind can be compared directly. The few records whose measure '
+              'nobody has classified keep their own recorded price instead. '
+              'Choose a single unit at "Price per" to keep the whole column '
+              'to one. A figure shown as "~ 0.19" is an estimate from '
+              'neighbouring years, never a record.'
+          : unitName == 'recorded unit'
+              ? 'What one of whatever the source measured this by actually '
+                  'cost. Each row is priced by its own measure, named in the '
+                  'tooltip on the figure, so every entry with a price has an '
+                  'answer here. Because the measures differ from row to row, '
+                  'pick a single unit at "Price per" before comparing one row '
+                  'against another.'
+              : 'The headline figure: pence per $unitName, worked out for '
+                  'this entry rather than stored. Choose a different unit '
+                  'with "Price per" above the table. A figure shown as '
+                  '"~ 0.19" is an estimate from neighbouring years, never a '
+                  'record.',
       value: (p) => p.perUnit != null
           ? _num(p.perUnit)
           : p.estimate != null

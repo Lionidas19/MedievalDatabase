@@ -215,7 +215,10 @@ class _SideNav extends StatelessWidget {
                 NavigationRailDestination(
                   icon: _RailIcon(icon: Icons.help_outline),
                   selectedIcon: const Icon(Icons.help),
-                  label: const Text('Guide'),
+                  // His word, not ours. The feedback asks for "a third
+                  // button here for 'Tutorial'", and a reader looking for the
+                  // thing he told them about should find the name he used.
+                  label: const Text('Tutorial'),
                 ),
               ],
             ),
@@ -305,7 +308,7 @@ class _BottomNav extends StatelessWidget {
         NavigationDestination(
           icon: Icon(Icons.help_outline),
           selectedIcon: Icon(Icons.help),
-          label: 'Guide',
+          label: 'Tutorial',
         ),
       ],
     );
@@ -510,17 +513,12 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
         const SizedBox(width: 4),
         _DisplayButton(compact: compact),
         const SizedBox(width: 4),
-        // Adding records is an editor's act, so it appears only once the
-        // reader has asked for Everything. Testing found people reaching the
-        // editor by accident; a button offering to create records, sitting in
-        // the toolbar above a table they came to read, is the same mistake
-        // one step earlier.
-        if (!compact && context.watch<ViewPreferences>().detailLevel.isEverything)
-          OutlinedButton.icon(
-            onPressed: app.isLoading ? null : () => _addEntry(context, app),
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('New entry'),
-          ),
+        // New entry used to live here, beside Open file. His note: "New
+        // Entry should not be located here. In my opinion it should actually
+        // be where you have Basics, More Detail, Everything, but it should
+        // ONLY appear after you click on Everything." It now does, in
+        // `filter_bar.dart`. The overflow menu below keeps a route to it for
+        // short screens, where the detail row is dropped altogether.
         const SizedBox(width: 8),
         // On a phone this moves into the overflow menu. It is the action a
         // reader wants least often and it costs the most width.

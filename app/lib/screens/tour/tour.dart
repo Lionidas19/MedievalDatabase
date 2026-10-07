@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
-import '../../state/app_controller.dart';
+import '../../state/view_mode.dart';
 import '../../theme.dart';
 
 /// The controls the tour can stop at.
@@ -176,21 +175,28 @@ class Tour {
   ];
 
   /// Opens the tour. Does nothing if it is already running.
-  static void start(BuildContext context) {
+  /// [currentMode] and [setMode] are passed in rather than read from a
+  /// provider, so this file never has to import `AppController`. See
+  /// `state/view_mode.dart` for why that matters.
+  static void start(
+    BuildContext context, {
+    required ViewMode Function() currentMode,
+    required ValueChanged<ViewMode> setMode,
+  }) {
     if (_entry != null) return;
     final overlay = Overlay.of(context);
-    final app = context.read<AppController>();
-    final startedOn = app.mode;
+    final startedOn = currentMode();
     // After the frame, so a view switched to in the same callback has been
     // laid out and its targets have registered.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _entry = OverlayEntry(
 builder: (_) => _TourOverlay(
-          app: app,
+          currentMode: currentMode,
+          setMode: setMode,
           onClose: () {
             // Put them back where they were, so a tour taken from the Guide
             // does not strand them on a screen they did not choose.
-            app.setMode(startedOn);
+            setMode(startedOn);
             _close();
           },
         ),
@@ -208,8 +214,14 @@ builder: (_) => _TourOverlay(
 }
 
 class _TourOverlay extends StatefulWidget {
-  const _TourOverlay({required this.app, required this.onClose});
-  final AppController app;
+  const _TourOverlay({
+    required this.currentMode,
+    required this.setMode,
+    required this.onClose,
+  });
+
+  final ViewMode Function() currentMode;
+  final ValueChanged<ViewMode> setMode;
   final VoidCallback onClose;
 
   @override
@@ -242,8 +254,8 @@ class _TourOverlayState extends State<_TourOverlay> {
   void _settle() {
     if (!mounted) return;
     final step = _steps[_index];
-    if (widget.app.mode != step.view) {
-      widget.app.setMode(step.view);
+    if (widget.currentMode() != step.view) {
+      widget.setMode(step.view);
       // Let it lay out before measuring.
       WidgetsBinding.instance.addPostFrameCallback((_) => _settle());
       return;

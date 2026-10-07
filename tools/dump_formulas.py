@@ -18,7 +18,7 @@ from collections import Counter
 from xml.etree import ElementTree as ET
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(_REPO_ROOT, "Copy of 1270s80sDatabase.xlsx")
+SRC = os.path.join(_REPO_ROOT, "Leo2026v 1270s80sDatabase.xlsx")
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 RNS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"

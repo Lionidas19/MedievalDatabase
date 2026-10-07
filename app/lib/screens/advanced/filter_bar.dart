@@ -98,7 +98,11 @@ class FilterState {
   bool matches(PriceEntry e) {
     if (!passesSearch(e)) return false;
     if (!passesDate(e)) return false;
-    if (county != null && e.county != county) return false;
+    // One option covers every spelling of a county; see [bareCountyName].
+    final c = e.county;
+    if (county != null && (c == null || bareCountyName(c) != county)) {
+      return false;
+    }
     if (category != null && e.category != category) return false;
     return true;
   }
@@ -143,6 +147,7 @@ class FilterBar extends StatefulWidget {
     required this.dense,
     required this.compact,
     required this.entries,
+    required this.onNewEntry,
     required this.stats,
     required this.statsWithEstimates,
     required this.brief,
@@ -171,6 +176,15 @@ class FilterBar extends StatefulWidget {
 
   /// Squeeze the toolbar onto one row.
   ///
+  /// Opens a blank record for editing.
+  ///
+  /// It lives beside the detail chips rather than in the app bar, and only at
+  /// Everything, which is where he asked for it: a button offering to create
+  /// records above a table somebody came to read is how people end up editing
+  /// by accident, and gating it on the level a reader has to choose puts it
+  /// behind a deliberate act.
+  final VoidCallback onNewEntry;
+
   /// Every entry in the database, for counting what each option would find.
   ///
   /// The bar needs the records themselves, not just how many survived: a
@@ -486,7 +500,19 @@ class _FilterBarState extends State<FilterBar> {
     final scheme = Theme.of(context).colorScheme;
     final theme = Theme.of(context).textTheme;
     final recorded = widget.outputUnit?.isRecordedUnit ?? false;
+    final comparable = widget.outputUnit?.isComparableUnit ?? false;
 
+    // 'NA', not the dash used everywhere else in the app.
+    //
+    // His words: when nothing in the selection can be priced, the figures
+    // "should still show up but have NA listed next to them. This at least
+    // would show that something about that information is incompatible rather
+    // than it simply not showing."
+    //
+    // A dash is this app's mark for a value the source never recorded, and
+    // that is a different statement: the records here have prices, they just
+    // cannot be expressed in the unit being asked for. Keeping one mark for
+    // both would blur the two.
     Widget one(String label, double? value) => Padding(
           padding: const EdgeInsets.only(right: Spacing.md),
           child: Column(
@@ -498,10 +524,11 @@ class _FilterBarState extends State<FilterBar> {
                       color: scheme.onSurfaceVariant,
                       letterSpacing: 0.4)),
               Text(
-                formatPence(value),
+                value == null ? 'NA' : formatPence(value),
                 style: theme.titleSmall?.copyWith(
                   fontFeatures: const [tabularFigures],
                   fontWeight: FontWeight.w600,
+                  color: value == null ? scheme.onSurfaceVariant : null,
                 ),
               ),
             ],
@@ -520,9 +547,11 @@ class _FilterBarState extends State<FilterBar> {
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.8)),
               Text(
-                formatPence(s.median),
+                s.median == null ? 'NA' : formatPence(s.median),
                 style: theme.headlineSmall?.copyWith(
-                  color: scheme.primary,
+                  color: s.median == null
+                      ? scheme.onSurfaceVariant
+                      : scheme.primary,
                   fontWeight: FontWeight.w700,
                   fontFeatures: const [tabularFigures],
                 ),
@@ -550,21 +579,31 @@ class _FilterBarState extends State<FilterBar> {
             if (!widget.compact) one('mode', s.mode),
             if (!widget.brief && !widget.compact) one('lowest', s.lowest),
             if (!widget.brief && !widget.compact) one('highest', s.highest),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: s.isEmpty
-                  ? Flexible(
-                      child: Text(
-                        'none of these can be priced per '
-                        '${widget.outputUnit?.name ?? 'that unit'}',
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.bodySmall?.copyWith(color: scheme.error),
-                      ),
-                    )
-                  : Text('of ${s.count}',
-                      style: theme.bodySmall
-                          ?.copyWith(color: scheme.onSurfaceVariant)),
-            ),
+            // `Flexible` has to be a direct child of the Row. It was inside
+            // the Padding, which is a ParentDataWidget error: in a release
+            // build Flutter paints a failed widget as a plain grey box, so
+            // the whole toolbar and the table under it disappeared behind
+            // one. It only showed on the path where nothing can be priced,
+            // which is the very case this message exists to explain.
+            if (s.isEmpty)
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Text(
+                    'none of these can be priced per '
+                    '${widget.outputUnit?.name ?? 'that unit'}',
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.bodySmall?.copyWith(color: scheme.error),
+                  ),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text('of ${s.count}',
+                    style: theme.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant)),
+              ),
           ],
         );
 
@@ -596,9 +635,13 @@ class _FilterBarState extends State<FilterBar> {
           // quarters against days against stones. Each row is sound on its
           // own; a median across them is not, and saying so is the only
           // honest way to show them at all.
-          if (recorded && !widget.stats.isEmpty)
+          // One line, so it says the shortest true thing for whichever
+          // default is in use. See the fuller note in Advanced Search.
+          if ((recorded || comparable) && !widget.stats.isEmpty)
             Text(
-              'across mixed measures, so compare with care',
+              recorded
+                  ? 'across mixed measures, so compare with care'
+                  : 'across weight, volume and the head, so compare with care',
               style: theme.bodySmall?.copyWith(color: scheme.error),
             ),
         ],
@@ -630,6 +673,14 @@ class _FilterBarState extends State<FilterBar> {
         _estimateChip(context),
         const SizedBox(width: Spacing.sm),
         _groupMenu(context, prefs: prefs),
+        if (prefs.detailLevel.isEverything) ...[
+          const SizedBox(width: Spacing.sm),
+          OutlinedButton.icon(
+            onPressed: widget.onNewEntry,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('New entry'),
+          ),
+        ],
       ],
     ));
   }
@@ -669,7 +720,10 @@ class _FilterBarState extends State<FilterBar> {
     return TourTarget(
       stop: TourStop.pricePer,
       child: FilterableDropdown<MetricItem?>(
-        width: 230,
+        // Wide enough for 'Default (Heads/Unit/Kilograms)', which is the
+        // label the control opens on and so the one it must be able to show.
+        // His phrase, kept verbatim, because it is the one he will look for.
+        width: 324,
         value: widget.outputUnit,
         label: 'Price per',
         hint: 'type a unit',
@@ -681,11 +735,7 @@ class _FilterBarState extends State<FilterBar> {
         entries: facetEntries<MetricItem?>(
           context,
           options: [
-            for (final u in widget.outputUnits)
-              (
-                u,
-                u.dimension == null ? u.name : '${u.name}  (${u.dimension})',
-              ),
+            for (final u in widget.outputUnits) (u, u.menuLabel),
           ],
           available: (u) => _countFacets().canPriceIn(u?.dimension),
           selected: widget.outputUnit,

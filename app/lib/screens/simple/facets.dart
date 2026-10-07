@@ -150,7 +150,9 @@ FacetCounts countFacets(Iterable<PriceEntry> entries, FacetQuery q) {
       };
 
   String? valueFor(_Axis axis, PriceEntry e) => switch (axis) {
-        _Axis.county => e.county,
+        // Counted under the bare name, so the counts line up with the
+        // options the pickers actually offer. See [bareCountyName].
+        _Axis.county => e.county == null ? null : bareCountyName(e.county!),
         _Axis.locality => e.locality,
         _Axis.timePeriod => e.timePeriodName,
         _Axis.category => e.category,
@@ -172,7 +174,10 @@ FacetCounts countFacets(Iterable<PriceEntry> entries, FacetQuery q) {
       soleFailure = axis;
     }
 
-    check(_Axis.county, q.county == null || e.county == q.county);
+    check(
+        _Axis.county,
+        q.county == null ||
+            (e.county != null && bareCountyName(e.county!) == q.county));
     check(_Axis.locality, q.locality == null || e.locality == q.locality);
     check(_Axis.timePeriod,
         q.timePeriod == null || e.timePeriodName == q.timePeriod);

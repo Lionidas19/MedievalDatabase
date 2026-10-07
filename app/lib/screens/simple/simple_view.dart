@@ -96,7 +96,10 @@ class _Query {
     if (specific != null && e.specific != specific!.name) return false;
     final y = e.year;
     if (y == null || y < years.start || y > years.end) return false;
-    if (county != null && e.county != county) return false;
+    final ec = e.county;
+    if (county != null && (ec == null || bareCountyName(ec) != county)) {
+      return false;
+    }
     if (locality != null && e.locality != locality) return false;
     if (timePeriod != null && e.timePeriodName != timePeriod) return false;
     return true;
@@ -269,7 +272,11 @@ class _SimpleViewState extends State<SimpleView> {
     final (minYear, maxYear) = repo.yearRange;
     _yearRange ??= RangeValues(minYear.toDouble(), maxYear.toDouble());
 
-    final outputUnits = [MetricItem.recordedUnit, ...repo.outputUnitChoices];
+    final outputUnits = [
+      MetricItem.comparableUnit,
+      MetricItem.recordedUnit,
+      ...repo.outputUnitChoices,
+    ];
     _outputUnit ??= _defaultOutputUnit(outputUnits);
 
     final categories = repo.categories;
@@ -281,10 +288,10 @@ class _SimpleViewState extends State<SimpleView> {
         : repo.specificsOf(_subcategory!.id);
 
     final countries = repo.countries;
-    final counties = repo.counties;
+    final counties = repo.filterCounties;
     final facets = _countFacets(app);
     final allLocalities = repo
-        .localities(countyId: _county?.id)
+        .localitiesInCounty(_county?.id)
         .map((l) => l.label)
         .toList();
     // Only localities that would find something, unless nothing would.
@@ -477,22 +484,16 @@ class _SimpleViewState extends State<SimpleView> {
                                 ),
                           ),
                         ),
-                      // Sweeping the range rather than typing it. The
-                      // researcher asked for this so the effect of moving the
-                      // dates can be watched rather than recomputed: "so that
-                      // you can very quickly slide the date around to see how
-                      // that changes things".
+                      // The slider itself is not here. It sits at the top
+                      // of the answer below, which is where he put it: "This
+                      // would also be the perfect place to put the year
+                      // slider if at all possible, so that you can very
+                      // quickly slide the date around to see how that changes
+                      // things." Watching a figure move while you drag only
+                      // works if the figure is on the screen with the handle.
                       //
-                      // Divisions fixed to whole years, because a range of
-                      // 21 years has no meaningful fractional position and a
-                      // free slider lands on 1283.4.
-                      _YearSlider(
-                        min: minYear,
-                        max: maxYear,
-                        values: _yearRange!,
-                        onChanged: (r) => setState(() => _yearRange = r),
-                      ),
-                      SizedBox(height: gap),
+                      // The two year boxes stay here, because they are part
+                      // of the sentence the form is asking you to read.
 
                       // --- what ---
                       //
@@ -630,12 +631,7 @@ class _SimpleViewState extends State<SimpleView> {
                                   in isSimple
                                       ? _commonUnits(outputUnits)
                                       : outputUnits)
-                                (
-                                  u,
-                                  u.dimension == null
-                                      ? u.name
-                                      : '${u.name}  (${u.dimension})',
-                                ),
+                                (u, u.menuLabel),
                             ],
                             available: (u) => facets.canPriceIn(u?.dimension),
                             selected: _outputUnit,
@@ -745,6 +741,9 @@ class _SimpleViewState extends State<SimpleView> {
                 const SizedBox(height: 20),
                 _ResultCard(
                   level: level,
+                  minYear: minYear,
+                  maxYear: maxYear,
+                  onYearsChanged: (r) => setState(() => _yearRange = r),
                   query: _Query(
                     category: _category,
                     subcategory: _subcategory,
@@ -804,13 +803,15 @@ class _SimpleViewState extends State<SimpleView> {
     return _suggestions = [for (final path in paths) path.label];
   }
 
-  /// The measure the source itself used: the one answer that always exists.
+  /// The one answer that always exists, and the most comparable one that
+  /// does.
   ///
-  /// See [MetricItem.recordedUnit]. This was Kilograms, which left a reader
+  /// See [MetricItem.comparableUnit]. This was Kilograms, which left a reader
   /// who picked a unit the selection cannot express with an empty screen and
-  /// no way back.
+  /// no way back; then the recorded unit, which always answers but leaves one
+  /// grain record in quarters and the next in bushels.
   MetricItem? _defaultOutputUnit(List<MetricItem> units) =>
-      MetricItem.recordedUnit;
+      MetricItem.comparableUnit;
 
 
   /// A short list for the simple view. 97 output units is a research tool, not
@@ -821,6 +822,7 @@ class _SimpleViewState extends State<SimpleView> {
     // sold by the head; offering only units of mass left those categories
     // with nothing to be priced in at all.
     const wanted = [
+      'comparable unit',
       'Recorded unit',
       'Kilograms',
       'Grams',
@@ -933,9 +935,24 @@ class _SimpleViewState extends State<SimpleView> {
 }
 
 class _ResultCard extends StatelessWidget {
-  const _ResultCard({required this.query, required this.level});
+  const _ResultCard({
+    required this.query,
+    required this.level,
+    required this.minYear,
+    required this.maxYear,
+    required this.onYearsChanged,
+  });
+
   final _Query query;
   final DetailLevel level;
+
+  /// The span the records cover, for the slider that heads the answer.
+  final int minYear;
+  final int maxYear;
+
+  /// Moving the slider re-asks the question. Nothing has to be pressed again:
+  /// the answer below is built from the range on every frame.
+  final ValueChanged<RangeValues> onYearsChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -962,22 +979,17 @@ class _ResultCard extends StatelessWidget {
         wrongKind++;
         continue;
       }
-      // Against its own valuation measure the answer is the recorded price
-      // itself, with nothing to convert. See [MetricItem.recordedUnit].
-      final calc = e.calculate(
-        outputY: query.outputUnit,
+      // One decision, made in the model. See [PriceEntry.pricedIn].
+      final p = e.pricedIn(
+        query.outputUnit,
         modernPoundsPerPenny: modern[e.year],
       );
-      final v = (query.outputUnit?.isRecordedUnit ?? false)
-          ? calc.recordedPricePerUnit
-          : calc.pencePerOutputY;
+      final v = p.perUnit;
       if (v == null || !v.isFinite) {
         unpriced++;
       } else {
         priced.add((e, v));
-        final m = (query.outputUnit?.isRecordedUnit ?? false)
-            ? calc.modernPerValuationMeasure
-            : calc.modernPerOutputY;
+        final m = p.modern;
         if (m != null && m.isFinite) modernValues.add(m);
       }
     }
@@ -1001,11 +1013,9 @@ class _ResultCard extends StatelessWidget {
         count: v.length,
       ));
     }
-    // Lower case in a sentence: "1.6 pence per recorded unit" reads as
-    // English, "per Recorded unit" reads as a variable name.
-    final unitName = (query.outputUnit?.isRecordedUnit ?? false)
-        ? 'recorded unit'
-        : query.outputUnit?.name ?? 'unit';
+    // Lower case in a sentence: "1.6 pence per comparable unit" reads as
+    // English, "per Comparable unit" reads as a variable name.
+    final unitName = query.outputUnit?.name ?? 'unit';
 
     return Card(
       child: Padding(
@@ -1026,6 +1036,17 @@ class _ResultCard extends StatelessWidget {
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
+            ),
+            // Sweeping the range rather than typing it, and sitting with
+            // the answer so the answer can be watched changing. Divisions are
+            // fixed to whole years: a span of 21 years has no meaningful
+            // fractional position, and a free slider lands on 1283.4.
+            const SizedBox(height: Spacing.sm),
+            _YearSlider(
+              min: minYear,
+              max: maxYear,
+              values: query.years,
+              onChanged: onYearsChanged,
             ),
             const SizedBox(height: 16),
             if (values.isEmpty)
@@ -1080,10 +1101,13 @@ class _ResultCard extends StatelessWidget {
                 ],
               ),
             ],
-            // Priced by each entry's own measure, an average here adds
-            // quarters to days to stones. Every individual figure is sound;
-            // the number on top of them is not comparable, and a reader
-            // deserves to know which of those they are looking at.
+            // Both defaults mix, and they do not mix equally, so they do
+            // not get the same warning. Priced by each record's own measure,
+            // an average adds quarters to days to stones. Priced per the
+            // comparable unit, everything sold by weight is already in
+            // kilograms and only the different *kinds* of thing are still
+            // being added together. Saying the stronger thing in the milder
+            // case would train a reader to ignore both.
             if (values.isNotEmpty &&
                 (query.outputUnit?.isRecordedUnit ?? false)) ...[
               const SizedBox(height: 10),
@@ -1093,6 +1117,20 @@ class _ResultCard extends StatelessWidget {
                 'so this average covers different measures at once. It shows '
                 'the shape of the selection rather than a figure you can '
                 'compare with another. Choose a single unit above for that.',
+                Theme.of(context).colorScheme.error,
+                Icons.straighten,
+              ),
+            ],
+            if (values.isNotEmpty &&
+                (query.outputUnit?.isComparableUnit ?? false)) ...[
+              const SizedBox(height: 10),
+              _note(
+                context,
+                'Everything sold by weight is priced per kilogram here, and '
+                'everything counted is priced per head, so figures of the '
+                'same kind can be compared. This average still adds the '
+                'kinds together. Choose a single unit above to keep it to '
+                'one.',
                 Theme.of(context).colorScheme.error,
                 Icons.straighten,
               ),

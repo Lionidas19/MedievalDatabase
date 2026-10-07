@@ -101,7 +101,11 @@ class _GuideScreenState extends State<GuideScreen> {
                         // itself now, and it puts the reader back where they
                         // started when it ends. Switching first made the
                         // Guide the screen it could never return to.
-                        onPressed: () => Tour.start(context),
+                        onPressed: () => Tour.start(
+                              context,
+                              currentMode: () => app.mode,
+                              setMode: app.setMode,
+                            ),
                         icon: const Icon(Icons.play_arrow, size: 18),
                         label: const Text('Start the tour'),
                       ),

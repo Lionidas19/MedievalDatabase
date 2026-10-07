@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dimensions
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(_REPO_ROOT, "Copy of 1270s80sDatabase.xlsx")
+SRC = os.path.join(_REPO_ROOT, "Leo2026v 1270s80sDatabase.xlsx")
 DB = os.path.join(_REPO_ROOT, "app", "data", "1270s80sDatabase_normalized.sqlite")
 OUT_DIR = os.path.join(_REPO_ROOT, "review")
 OUT = os.path.join(OUT_DIR, "1270s80sDatabase_review.sqlite")

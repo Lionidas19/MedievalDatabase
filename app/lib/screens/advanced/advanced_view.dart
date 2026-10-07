@@ -40,6 +40,31 @@ Future<void> openEntryEditor(BuildContext context, PriceEntry entry) async {
   if (updated != null) app.applyEdit(updated);
 }
 
+/// Opens a blank record, and throws it away again if the editor is cancelled.
+///
+/// Kept beside [openEntryEditor] so both routes into the editor behave the
+/// same way. A cancelled new entry must not leave an empty row behind.
+Future<void> createEntry(BuildContext context) async {
+  final app = context.read<AppController>();
+  final messenger = ScaffoldMessenger.of(context);
+  final entry = app.createEntry();
+  if (!context.mounted) return;
+  final updated = await showEditEntryDialog(
+    context,
+    entry: entry,
+    repository: app.repository,
+    isNew: true,
+  );
+  if (updated == null) {
+    app.deleteEntry(entry.entryId);
+    return;
+  }
+  app.applyEdit(updated);
+  messenger.showSnackBar(
+    SnackBar(content: Text('Added entry #${updated.legacyEntryNo ?? ''}')),
+  );
+}
+
 /// Shows a record read-only, and opens the editor only if asked.
 ///
 /// The two are deliberately separate acts: see `entry_details_dialog.dart`.
@@ -212,28 +237,20 @@ class _AdvancedViewState extends State<AdvancedView> {
     final priced = <PricedEntry>[];
     for (final e in app.entries) {
       if (!_filters.matches(e)) continue;
-      // A price per kilogram for something sold by the head is a number the
-      // source will produce and nobody should trust. Compute it, then withhold
-      // it, so the row can still explain itself.
-      final comparable = e.canBePricedPer(_outputUnit);
-      final calc = e.calculate(
-        outputY: _outputUnit,
-        // One lookup per entry against a map built once; see
-        // DatabaseRepository.modernPoundsPerPenny. Null for a year with no
-        // factor, which yields dashes rather than invented pounds.
-        modernPoundsPerPenny: modern[e.year],
-      );
-      // Against its own valuation measure the answer is the recorded price
-      // itself: the source already says what one of them cost. No conversion,
-      // so no way for it to come back empty.
-      final recorded = _outputUnit?.isRecordedUnit ?? false;
+      // Which unit this record is priced against, and what that comes to,
+      // both decided in one place. See [PriceEntry.pricedIn]: the comparable
+      // option resolves to a different base from row to row, which is not a
+      // decision a view should be making.
+      //
+      // One modern-money lookup per entry against a map built once; see
+      // DatabaseRepository.modernPoundsPerPenny. Null for a year with no
+      // factor, which yields dashes rather than invented pounds.
+      final p = e.pricedIn(_outputUnit, modernPoundsPerPenny: modern[e.year]);
       priced.add(PricedEntry(
         entry: e,
-        calc: calc,
-        perUnit: recorded
-            ? calc.recordedPricePerUnit
-            : (comparable ? calc.pencePerOutputY : null),
-        comparable: comparable,
+        calc: p.calc,
+        perUnit: p.perUnit,
+        comparable: p.comparable,
       ));
     }
     if (_estimating) {
@@ -396,16 +413,18 @@ class _AdvancedViewState extends State<AdvancedView> {
     // The recorded unit leads the list: it is the default, and it is where a
     // reader who has narrowed themselves into an unanswerable question comes
     // back to.
-    final outputUnits = [MetricItem.recordedUnit, ...repo.outputUnitChoices];
+    final outputUnits = [
+      MetricItem.comparableUnit,
+      MetricItem.recordedUnit,
+      ...repo.outputUnitChoices,
+    ];
     _outputUnit ??= _defaultOutputUnit(outputUnits);
 
     final size = MediaQuery.sizeOf(context);
     final compact = Breakpoints.isCompact(size.width);
     final short = Breakpoints.isShort(size.height);
     final narrow = Breakpoints.isNarrow(size.width);
-    final unitName = _outputUnit?.isRecordedUnit ?? false
-        ? 'recorded unit'
-        : _outputUnit?.name ?? 'unit';
+    final unitName = _outputUnit?.name ?? 'unit';
     // Null where the database carries no conversion factors, which hides the
     // modern-money columns rather than showing a column of dashes.
     final columns = columnsFor(prefs.detailLevel, unitName,
@@ -427,7 +446,7 @@ class _AdvancedViewState extends State<AdvancedView> {
         FilterBar(
           filters: _filters,
           onFiltersChanged: (f) => setState(() => _filters = f),
-          counties: repo.counties.map((c) => c.label).toList(),
+          counties: repo.filterCounties.map((c) => c.label).toList(),
           categories: repo.categories.map((c) => c.name).toList(),
           outputUnits: outputUnits,
           outputUnit: _outputUnit,
@@ -444,6 +463,7 @@ class _AdvancedViewState extends State<AdvancedView> {
           dense: short,
           compact: compact,
           entries: app.entries,
+          onNewEntry: () => createEntry(context),
           stats: _stats,
           statsWithEstimates: _statsWithEstimates,
           brief: narrow,
@@ -491,7 +511,7 @@ class _AdvancedViewState extends State<AdvancedView> {
       _filters = FilterState(
         years: RangeValues(minYear.toDouble(), maxYear.toDouble()),
       );
-      _outputUnit = MetricItem.recordedUnit;
+      _outputUnit = MetricItem.comparableUnit;
       _sortColumnId = 'year';
       _ascending = true;
       _estimating = false;
@@ -506,7 +526,7 @@ class _AdvancedViewState extends State<AdvancedView> {
   /// the question was unanswerable, and had no way to return. Pricing each
   /// entry by the measure the source itself used cannot come back empty.
   MetricItem _defaultOutputUnit(List<MetricItem> units) =>
-      MetricItem.recordedUnit;
+      MetricItem.comparableUnit;
 }
 
 /// What the table shows when every row has been filtered away.

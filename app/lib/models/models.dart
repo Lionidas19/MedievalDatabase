@@ -15,6 +15,23 @@ import '../services/pricing.dart';
 /// Free of [MetricItem] so the Specifics lookup form can ask the same question of
 /// a bare dimension name — it needs to know which units are worth offering
 /// before it has an entry in hand.
+/// A county name with the compiler's hedge taken off it.
+///
+/// Sixteen counties are recorded as `Oxfordshire (?)` and the like, which is
+/// his own notation from the Places tab: he is not certain the place sits in
+/// that county. Six of them carry records, 141 entries in all.
+///
+/// The mark is evidence and it stays in the data and on the row. It has no
+/// business in a filter, though: to anyone narrowing a table, `Oxfordshire`
+/// and `Oxfordshire (?)` are one county, and offering both as separate
+/// options hid 124 records from whoever picked the plain one. So the pickers
+/// offer one option per bare name and match every spelling of it.
+///
+/// The entry editor is deliberately **not** normalised: he has to be able to
+/// record the hedge on purpose, which is the whole reason it exists.
+String bareCountyName(String name) =>
+    name.endsWith(' (?)') ? name.substring(0, name.length - 4) : name;
+
 bool dimensionsComparable(String? a, String? b) {
   if (a == null || b == null) return true;
   if (a == b) return true;
@@ -68,6 +85,73 @@ class MetricItem {
       MetricItem('__recorded__', 'Recorded unit', null);
 
   bool get isRecordedUnit => id == recordedUnit.id;
+
+  /// The one option that can price anything, and the default in both views.
+  ///
+  /// His request, in his words: "a new all-inclusive option ... so that it
+  /// always generates an outcome". What he named it, `Heads/Unit/Kilograms`,
+  /// is what it does: each record is priced per kilogram, per litre, per
+  /// metre or per head, whichever its own measure is a kind of.
+  ///
+  /// This is not the same as [recordedUnit], and the difference is the point.
+  /// Priced by its own measure, one grain record reads as pence per quarter
+  /// and the next as pence per bushel, and the two cannot be compared.
+  /// Normalised within each kind of thing, both read as pence per kilogram.
+  ///
+  /// 7,437 of the 7,501 records resolve to a base below. The 64 whose measure
+  /// nobody has classified fall back to the recorded price, so this still
+  /// never returns an empty column, which was the whole of his point.
+  static const comparableUnit =
+      MetricItem('__comparable__', 'comparable unit', null);
+
+  bool get isComparableUnit => id == comparableUnit.id;
+
+  /// The base unit of each kind of thing, and what [comparableUnit] resolves
+  /// to for a record measured in that kind.
+  ///
+  /// These are const rather than read from `standards`, because they are
+  /// definitional: the metric values in this database are grams, litres and
+  /// metres, so a kilogram is 1000 of them and the rest are 1. The matching
+  /// rows do exist in `standards` with exactly these values, and picking one
+  /// of them by hand gives the same answer as this does.
+  ///
+  /// `per-unit` shares the countable base with `count`, which is what
+  /// [dimensionsComparable] already says about the two of them.
+  static const _bases = <String, MetricItem>{
+    'mass': MetricItem('__base_kg__', 'Kilograms', 1000, dimension: 'mass'),
+    'volume': MetricItem('__base_l__', 'Litres', 1, dimension: 'volume'),
+    'length': MetricItem('__base_m__', 'Metres', 1, dimension: 'length'),
+    'count':
+        MetricItem('__base_head__', 'Heads/Units', 1, dimension: 'count'),
+    'per-unit':
+        MetricItem('__base_head__', 'Heads/Units', 1, dimension: 'count'),
+  };
+
+  /// Null for a kind of unit with no base, which today means only the
+  /// unclassified ones.
+  static MetricItem? baseFor(String? dimension) =>
+      dimension == null ? null : _bases[dimension];
+
+  /// How this unit is named in a chooser, as opposed to in a column heading.
+  ///
+  /// The sentinel is called **Default** here because that is what he asked
+  /// for: "The user then didn't know how to fix the 'price per' as there was
+  /// no 'default' option that they could scroll to... Therefore a 'Default'
+  /// option should exist". His suggested name for it was
+  /// `Heads/Unit/Kilograms`, meaning one option that always produces an
+  /// answer; pricing each record by the measure its own source used is that
+  /// option, and is honest about quarters and acres besides, which his three
+  /// names leave out.
+  ///
+  /// `name` stays 'Recorded unit' because it is what the per-unit column
+  /// heading is built from, and 'Pence per Default' would say nothing.
+  String get menuLabel => isComparableUnit
+      ? 'Default (Heads/Unit/Kilograms)'
+      : isRecordedUnit
+          ? 'The measure each record used'
+          : dimension == null
+              ? name
+              : '$name  ($dimension)';
 
   final String id;
   final String name;
@@ -272,9 +356,67 @@ class PriceEntry {
   /// Counting cattle by the head and then asking their price per kilogram is
   /// arithmetic the source will happily perform and nobody should believe.
   bool canBePricedPer(MetricItem? unit) {
-    // Nothing is converted, so nothing can fail to convert.
-    if (unit != null && unit.isRecordedUnit) return true;
+    // Nothing is converted, so nothing can fail to convert. The comparable
+    // unit is the same promise by a different route: every record either
+    // reaches a base or keeps its recorded price.
+    if (unit != null && (unit.isRecordedUnit || unit.isComparableUnit)) {
+      return true;
+    }
     return primaryMeasure?.comparableWith(unit) ?? true;
+  }
+
+  /// Which concrete unit to price this record against.
+  ///
+  /// Null means "by its own measure": either the reader asked for that, or
+  /// they asked for the comparable unit and this record's measure is not
+  /// classified, so there is no base to normalise it to.
+  MetricItem? resolveOutputUnit(MetricItem? unit) {
+    if (unit == null || unit.isRecordedUnit) return null;
+    if (unit.isComparableUnit) {
+      return MetricItem.baseFor(primaryMeasure?.dimension);
+    }
+    return unit;
+  }
+
+  /// This record's headline figure in whatever unit the reader chose.
+  ///
+  /// One method rather than the same four-branch decision written out at
+  /// every call site. The two views had a copy each, and a third kind of
+  /// unit would have meant editing both and hoping they still agreed.
+  PricedInUnit pricedIn(MetricItem? unit, {double? modernPoundsPerPenny}) {
+    final resolved = resolveOutputUnit(unit);
+
+    if (resolved == null) {
+      // The sentinel is still passed through, exactly as it always was, so
+      // nothing else the calculation produces changes shape.
+      final calc = calculate(
+        outputY: unit,
+        modernPoundsPerPenny: modernPoundsPerPenny,
+      );
+      return PricedInUnit(
+        calc: calc,
+        perUnit: calc.recordedPricePerUnit,
+        modern: calc.modernPerValuationMeasure,
+        unit: null,
+        comparable: true,
+      );
+    }
+
+    // A price per kilogram for something sold by the head is a number the
+    // source will produce and nobody should trust. Compute it, then withhold
+    // it, so the row can still explain itself.
+    final comparable = canBePricedPer(resolved);
+    final calc = calculate(
+      outputY: resolved,
+      modernPoundsPerPenny: modernPoundsPerPenny,
+    );
+    return PricedInUnit(
+      calc: calc,
+      perUnit: comparable ? calc.pencePerOutputY : null,
+      modern: comparable ? calc.modernPerOutputY : null,
+      unit: resolved,
+      comparable: comparable,
+    );
   }
 
   /// Runs the recovered calculation chain for this entry.
@@ -409,4 +551,27 @@ extension AverageKindLabel on AverageKind {
         AverageKind.mode => 'Mode',
         AverageKind.all => 'All',
       };
+}
+
+/// One record, priced in the unit the reader asked for.
+///
+/// [unit] is the unit actually used, which for the comparable option differs
+/// from row to row: null means the record kept its own measure.
+class PricedInUnit {
+  const PricedInUnit({
+    required this.calc,
+    required this.perUnit,
+    required this.modern,
+    required this.unit,
+    required this.comparable,
+  });
+
+  final PriceCalculation calc;
+  final double? perUnit;
+  final double? modern;
+  final MetricItem? unit;
+
+  /// False when the record is measured in a kind of thing the chosen unit
+  /// cannot express. Such a record is reported and left out, never converted.
+  final bool comparable;
 }
