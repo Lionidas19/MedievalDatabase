@@ -196,21 +196,6 @@ class _AdvancedViewState extends State<AdvancedView> {
     });
   }
 
-  /// Orders two rows by whatever the sorted column says to order them by.
-  ///
-  /// Missing values sort last in *both* directions. A row with no page number
-  /// is not a row with a low one, and flipping the sort should not parade the
-  /// blanks to the top.
-  int _compare(SortKey key, PricedEntry a, PricedEntry b) {
-    final x = key(a);
-    final y = key(b);
-    if (x == null && y == null) return 0;
-    if (x == null) return 1;
-    if (y == null) return -1;
-    final cmp = compareSortKeys(x, y);
-    return _ascending ? cmp : -cmp;
-  }
-
   /// Filters, prices, sorts and groups — once per distinct [_ResultKey].
   List<EntryGroup> _results(
       AppController app, ViewPreferences prefs, EntryColumn? sortColumn) {
@@ -260,8 +245,12 @@ class _AdvancedViewState extends State<AdvancedView> {
       _estimateCount = 0;
     }
 
+    // Sorted even with no sortable column chosen, because the sink is not
+    // the column's doing: it is about which rows can answer the question the
+    // reader asked.
     final sortKey = sortColumn?.sortKey;
-    if (sortKey != null) priced.sort((a, b) => _compare(sortKey, a, b));
+    priced.sort((a, b) =>
+        comparePricedEntries(a, b, key: sortKey, ascending: _ascending));
 
     _cacheKey = key;
     _matchCount = priced.length;

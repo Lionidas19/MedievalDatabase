@@ -552,3 +552,42 @@ String? missingPerUnitReason(PricedEntry p, String unitName) {
   }
   return 'The output or valuation unit has no metric value on record.';
 }
+
+/// Whether a row has anything at all in the per-unit column.
+///
+/// An estimate counts: it is drawn in the cell, marked with a tilde, and a
+/// reader who turned estimates on is asking to see exactly those rows.
+bool hasFigureInChosenUnit(PricedEntry p) =>
+    p.perUnit != null || p.estimate != null;
+
+/// Orders two rows of the table.
+///
+/// **A row the chosen unit cannot answer in sinks, whatever the sort is.**
+/// Pick a unit most of the selection cannot express and the blanks used to
+/// sit scattered down the table, so reading the figures meant sorting by that
+/// column first just to drive them out of the way. They are not hidden: the
+/// count says how many there are and the rows are still below. Within each
+/// half the chosen sort applies as before.
+///
+/// After that, missing values sort last in *both* directions. A row with no
+/// page number is not a row with a low one, and flipping the sort should not
+/// parade the blanks to the top.
+int comparePricedEntries(
+  PricedEntry a,
+  PricedEntry b, {
+  required SortKey? key,
+  required bool ascending,
+}) {
+  final aHas = hasFigureInChosenUnit(a);
+  final bHas = hasFigureInChosenUnit(b);
+  if (aHas != bHas) return aHas ? -1 : 1;
+  if (key == null) return 0;
+
+  final x = key(a);
+  final y = key(b);
+  if (x == null && y == null) return 0;
+  if (x == null) return 1;
+  if (y == null) return -1;
+  final cmp = compareSortKeys(x, y);
+  return ascending ? cmp : -cmp;
+}
