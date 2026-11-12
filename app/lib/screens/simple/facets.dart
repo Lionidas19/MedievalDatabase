@@ -154,11 +154,11 @@ enum _Axis { county, locality, timePeriod, category, subcategory, specific }
 /// One pass rather than one per option: with 7,800 entries and some 250
 /// options across the form, asking each option separately would be a quarter
 /// of a million comparisons every time a filter moved. Instead each entry is
-/// tested once against each axis and records which axes it fails. An entry
-/// that fails none counts towards every list; one that fails exactly one
-/// counts towards that list alone — it would match if you changed only that
-/// filter, which is precisely what the dropdown is offering to do. Fail two
-/// and it is out of reach either way.
+/// tested once against each filter, and counts towards a list wherever it
+/// would match if only that choice were changed, which is precisely what the
+/// dropdown is offering to do. For county, place and time that means passing
+/// every other filter. For the item levels it means passing the ones above,
+/// since changing a level clears those below it.
 FacetCounts countFacets(Iterable<PriceEntry> entries, FacetQuery q) {
   final counties = <String, FacetCount>{};
   final localities = <String, FacetCount>{};
@@ -195,27 +195,37 @@ FacetCounts countFacets(Iterable<PriceEntry> entries, FacetQuery q) {
     final year = e.year;
     if (year == null || year < q.startYear || year > q.endYear) continue;
 
-    _Axis? soleFailure;
-    var failures = 0;
-    void check(_Axis axis, bool passes) {
-      if (passes) return;
-      failures++;
-      soleFailure = axis;
-    }
+    final county = q.county == null ||
+        (e.county != null && bareCountyName(e.county!) == q.county);
+    final locality = q.locality == null || e.locality == q.locality;
+    final time = q.timePeriod == null || e.timePeriodName == q.timePeriod;
+    final category = q.category == null || e.category == q.category;
+    final subcategory =
+        q.subcategory == null || e.subcategory == q.subcategory;
+    final specific = q.specific == null || e.specific == q.specific;
 
-    check(
-        _Axis.county,
-        q.county == null ||
-            (e.county != null && bareCountyName(e.county!) == q.county));
-    check(_Axis.locality, q.locality == null || e.locality == q.locality);
-    check(_Axis.timePeriod,
-        q.timePeriod == null || e.timePeriodName == q.timePeriod);
-    check(_Axis.category, q.category == null || e.category == q.category);
-    check(_Axis.subcategory,
-        q.subcategory == null || e.subcategory == q.subcategory);
-    check(_Axis.specific, q.specific == null || e.specific == q.specific);
+    final where = county && locality && time;
+    final what = category && subcategory && specific;
 
-    if (failures > 1) continue;
+    // Which lists this record can count towards. County, place and time of
+    // year are each judged against every other filter, as above.
+    //
+    // The three item levels are not, because they nest: choosing a category
+    // clears the subcategory and specific beneath it, and choosing a
+    // subcategory clears the specific. So each is judged without the levels
+    // below it. Judged with them, picking "wheat" from the search box struck
+    // out every other subcategory and every other category as "(none)" (no
+    // fish is wheat), and the reader could not move off Grain at all without
+    // first finding a way to clear it.
+    final counts = <_Axis>[
+      if (locality && time && what) _Axis.county,
+      if (county && time && what) _Axis.locality,
+      if (county && locality && what) _Axis.timePeriod,
+      if (where) _Axis.category,
+      if (where && category) _Axis.subcategory,
+      if (where && category && subcategory) _Axis.specific,
+    ];
+    if (counts.isEmpty) continue;
 
     // Whether this record could be expressed in the unit being asked for,
     // which is a different question from whether it matches the filters.
@@ -232,15 +242,11 @@ FacetCounts countFacets(Iterable<PriceEntry> entries, FacetQuery q) {
       );
     }
 
-    if (failures == 0) {
+    if (where && what) {
       matching++;
       dimensions.add(e.primaryMeasure?.dimension);
-      for (final axis in _Axis.values) {
-        tally(axis);
-      }
-    } else {
-      tally(soleFailure!);
     }
+    counts.forEach(tally);
   }
 
   return FacetCounts(

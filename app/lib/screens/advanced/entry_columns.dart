@@ -12,6 +12,7 @@ import '../../models/models.dart';
 import '../../services/pricing.dart';
 import '../../services/trend.dart';
 import '../../state/view_preferences.dart';
+import '../../widgets/info_dot.dart';
 
 /// What a column sorts by, or null where sorting it means nothing.
 ///
@@ -44,6 +45,7 @@ class PricedEntry {
     required this.calc,
     required this.perUnit,
     required this.comparable,
+    this.modernPerUnit,
     this.estimate,
   });
 
@@ -58,6 +60,16 @@ class PricedEntry {
   /// False when this entry's measure is a different kind of thing from the
   /// chosen output unit: cattle by the head, asked for per kilogram.
   final bool comparable;
+
+  /// [perUnit] in modern money, withheld exactly where [perUnit] is.
+  ///
+  /// Taken from the same decision as [perUnit] rather than read off the
+  /// calculation, which always answers per the unit it was handed. The table
+  /// used to read it from there, so a row that could not be priced per
+  /// kilogram still showed a modern figure per kilogram beside the dash, and
+  /// on "Recorded unit" the modern column was blank where the pence one was
+  /// not.
+  final double? modernPerUnit;
 
   /// A guess at what this entry would have cost, where the source cannot say
   /// and the reader has asked for estimates. Never a recorded figure, and
@@ -123,6 +135,29 @@ class EntryColumn {
   final bool startsGroup;
 }
 
+/// Records as text to paste: a line of headings, then one line per record,
+/// tab-separated, which is what a spreadsheet takes as rows and columns.
+///
+/// The headings and values are the table's own, at whatever detail level it
+/// is showing, so what lands in the spreadsheet is what was on the screen.
+/// The dash the table draws for "the source does not say" becomes an empty
+/// cell: in a spreadsheet a dash is text, and text breaks a column of sums.
+String recordsAsText(List<PricedEntry> records, List<EntryColumn> columns) {
+  final shown = [
+    for (final c in columns)
+      if (c.sortKey != null) c,
+  ];
+  String clean(String s) {
+    final flat = s.replaceAll(RegExp(r'[\t\r\n]+'), ' ').trim();
+    return flat == '—' ? '' : flat;
+  }
+
+  return [
+    shown.map((c) => clean(c.label)).join('\t'),
+    for (final p in records) shown.map((c) => clean(c.value(p))).join('\t'),
+  ].join('\n');
+}
+
 String _dash(Object? v) {
   final s = v?.toString() ?? '';
   return s.isEmpty ? '—' : s;
@@ -148,14 +183,37 @@ String _num(double? v) => v == null ? '—' : formatPence(v);
 /// works out to, how the figure was reached, what else the record says, and
 /// where it came from. [EntryColumn.startsGroup] marks each of those turns, so
 /// the table can draw the seam.
-/// [modernYear] labels the modern-money columns, e.g. 2026, and null hides
+/// [modernYear] labels the modern-money columns, e.g. 2017, and null hides
 /// them. Null is the honest state when the database has no conversion
-/// factors: a column of dashes headed "In 2026 money" tells a reader the app
-/// is broken, when in fact nobody has supplied the figures.
-List<EntryColumn> columnsFor(DetailLevel level, String unitName,
-    {int? modernYear}) {
+/// factors: a column of dashes headed "Price in 2017 £" tells a reader the
+/// app is broken, when in fact nobody has supplied the figures.
+///
+/// [counts] lets an explanation quote how many entries carry a time of year.
+/// Without it the sentence is left out rather than given a stale figure.
+///
+/// The explanations are the researcher's own wording, from his notes on the
+/// tutorial, lightly edited. He means to rewrite them at greater length once
+/// he has seen them in place.
+List<EntryColumn> columnsFor(
+  DetailLevel level,
+  String unitName, {
+  int? modernYear,
+  EntryCounts? counts,
+}) {
   final detailed = level.atLeastDetailed;
   final everything = level.isEverything;
+  final recorded = unitName == MetricItem.recordedUnit.name;
+  final modern = unitName == MetricItem.comparableUnit.name;
+  // What "Price per" is set to now, for the end of the per-unit
+  // explanations. The headings say only "selected unit", at his request, so
+  // this is where a reader finds out which one.
+  final setTo = recorded
+      ? 'It is set to the measure each record used, named on each figure.'
+      : modern
+      ? 'It is set to Modern (# or Metric Kg): anything sold by weight '
+            'per kilogram, counted things per head, volume per litre and '
+            'length per metre.'
+      : 'It is set to $unitName.';
 
   return [
     // ------------------------------------------------ when, where, what --
@@ -166,17 +224,21 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
         width: 88,
         numeric: true,
         sortKey: (p) => p.entry.legacyEntryNo,
-        explanation: 'The row this record occupies in the source spreadsheet, '
-            'for checking an entry against the original. New entries carry on '
-            'from the last one.',
+        explanation: 'This column records the individual entry number.',
         value: (p) => _dash(p.entry.legacyEntryNo),
       ),
     EntryColumn(
       id: 'year',
       label: 'Year',
       sortKey: (p) => p.entry.year,
-      width: 72,
+      // Name, sort arrow and info button: label + 22 + 13 + 16. At 72, from
+      // before it had an explanation, the heading clipped to "Y...".
+      width: 92,
       numeric: true,
+      explanation:
+          'Year beginning on Michaelmas of the prior year and '
+          'ending on Michaelmas of the current year: traditionally 29 '
+          'September in the Julian calendar.',
       value: (p) => _dash(p.entry.year),
     ),
     if (detailed)
@@ -189,9 +251,9 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
         // deserve the width its name implies.
         width: 128,
         explanation:
-            'Month, season or feast day, exactly as the record gives '
-            'it — the source mixes all three in one column. Only 363 of the '
-            '7,800 entries carry one at all.',
+            '${Explain.timeOfYear}'
+            '${counts == null ? '' : ' Only ${counts.timed} of the '
+                      '${counts.total} entries carry one at all.'}',
         value: (p) => _dash(p.entry.timePeriodName),
       ),
     EntryColumn(
@@ -199,6 +261,12 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
       label: 'Place',
       sortKey: (p) => p.entry.placeLabel,
       width: 200,
+      // Not his last sentence, "at present you can only search or group
+      // data by county": the search box always matched settlements by name,
+      // and Filters now has a Settlement box. Grouping stops at county.
+      explanation:
+          'Settlement name and historic county name. Filters can narrow the '
+          'table to one settlement; grouping works by county.',
       value: (p) => p.entry.placeLabel,
     ),
     EntryColumn(
@@ -206,16 +274,22 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
       label: 'Item',
       sortKey: (p) => p.entry.categoryLabel,
       width: 260,
+      explanation: Explain.item,
       value: (p) => p.entry.categoryLabel,
     ),
-    if (detailed)
-      EntryColumn(
-        id: 'quantity',
-        label: 'Quantity',
-        sortKey: (p) => p.entry.unit1,
-        width: 190,
-        value: (p) => p.entry.quantityLabel,
-      ),
+    // At Basics as well. A price means little without what it was a price
+    // of, and "4s" reads very differently for a quarter of wheat and for a
+    // pound of pepper. The researcher asked for it there for that reason.
+    EntryColumn(
+      id: 'quantity',
+      label: 'Quantity',
+      sortKey: (p) => p.entry.unit1,
+      width: 190,
+      explanation:
+          'The historic total of items or people sold, paid, '
+          'taxed or fined.',
+      value: (p) => p.entry.quantityLabel,
+    ),
 
     // ------------------------------------------------ what it cost ------
     EntryColumn(
@@ -230,9 +304,11 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
       width: 178,
       startsGroup: true,
       explanation:
-          'The price exactly as the record gives it, in pounds, '
-          'shillings and pence. Often a price per unit rather than a total — '
-          'think of an hourly wage rather than a pay slip.',
+          'The price per unit exactly as the record gives it, in pounds (£), '
+          'shillings (s) and pence (d). This was typically by the quarter '
+          'for grain, by the acre for agricultural work, or by the day for '
+          'general labour. For the total cost see the column "Total sale in '
+          'pence", shown at Everything.',
       value: (p) => p.entry.priceLabel,
     ),
 
@@ -243,25 +319,27 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
     // exactly what switching detail level is.
     if (modernYear != null)
       EntryColumn(
+        // Named as a price, beside "Price as recorded", because it is that
+        // same price and nothing else. As "In 2026 money" it was read as the
+        // modern form of the per-unit figure, and the per-unit one as the
+        // total sale: the headings said "in what" and never "per what".
         id: 'modernPrice',
-        label: 'In $modernYear money',
+        label: 'Price in $modernYear £',
         sortKey: (p) => p.calc.modernPerValuationMeasure,
         width: 168,
         numeric: true,
         explanation:
-            'The recorded price in today\'s pounds: what one of whatever the '
-            'source measured this by would cost now. Worked out from the '
-            'penny value of the entry\'s own year and then carried forward '
-            'for inflation, so it moves with the year of the record and not '
-            'just with the price. It is a guide to scale, not a valuation: '
-            'what a penny bought in 1270 is a question with more than one '
-            'defensible answer.',
+            'The recorded price in modern $modernYear British pounds (£), '
+            'from the National Archives\' figure for a penny in the entry\'s '
+            'own year. A guide to scale, not a valuation: what a penny '
+            'bought in 1270 is a question with more than one defensible '
+            'answer.',
         value: (p) => _pounds(p.calc.modernPerValuationMeasure),
         cellTooltip: (p) => p.calc.modernPerValuationMeasure != null
             ? null
             : p.entry.year == null
-                ? 'No year on this entry, so there is no factor to convert by.'
-                : 'No conversion factor for ${p.entry.year}.',
+            ? 'No year on this entry, so there is no factor to convert by.'
+            : 'No conversion factor for ${p.entry.year}.',
       ),
     if (everything)
       EntryColumn(
@@ -271,43 +349,28 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
         width: 132,
         numeric: true,
         explanation:
-            'The same recorded price expressed in pence alone: '
-            'pounds x 240 + shillings x 12 + pence.',
+            'The value of Price as recorded given in pence: 1 pound = 240 '
+            'pence, 1 shilling = 12 pence.',
         value: (p) => _num(p.calc.priceInPence),
       ),
 
     // ------------------------------------------- what that works out to --
     EntryColumn(
       id: 'perUnit',
-      label: 'Pence per $unitName',
+      // A fixed name, at his request, rather than "Pence per Kilograms" one
+      // moment and "Pence per Tower Pound" the next. Which unit it is goes
+      // at the end of the explanation, and on each figure where it varies.
+      label: 'Pence per selected unit',
       sortKey: (p) => p.perUnit,
-      // 'Pence per comparable unit' is the longest heading this column takes,
-      // and it has to fit its info button and sort arrow beside it.
       width: 230,
       numeric: true,
       startsGroup: true,
-      explanation: unitName == 'comparable unit'
-          ? 'The headline figure, worked out for this entry rather than '
-              'stored. Everything sold by weight is priced per kilogram, '
-              'everything counted per head, everything by volume per litre '
-              'and everything by length per metre, so two rows of the same '
-              'kind can be compared directly. The few records whose measure '
-              'nobody has classified keep their own recorded price instead. '
-              'Choose a single unit at "Price per" to keep the whole column '
-              'to one. A figure shown as "~ 0.19" is an estimate from '
-              'neighbouring years, never a record.'
-          : unitName == 'recorded unit'
-              ? 'What one of whatever the source measured this by actually '
-                  'cost. Each row is priced by its own measure, named in the '
-                  'tooltip on the figure, so every entry with a price has an '
-                  'answer here. Because the measures differ from row to row, '
-                  'pick a single unit at "Price per" before comparing one row '
-                  'against another.'
-              : 'The headline figure: pence per $unitName, worked out for '
-                  'this entry rather than stored. Choose a different unit '
-                  'with "Price per" above the table. A figure shown as '
-                  '"~ 0.19" is an estimate from neighbouring years, never a '
-                  'record.',
+      explanation:
+          'The price in pence according to the "Price per" unit chosen '
+          'above. This value is used for calculating averages. If "Price '
+          'per" is left alone it matches the historic record. $setTo A '
+          'figure shown as "~ 0.19" is an estimate from neighbouring years, '
+          'never a record.',
       value: (p) => p.perUnit != null
           ? _num(p.perUnit)
           : p.estimate != null
@@ -319,7 +382,7 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
         }
         // Priced by its own measure, the figure means nothing without
         // saying which measure that was.
-        if (unitName == 'recorded unit' && p.perUnit != null) {
+        if (recorded && p.perUnit != null) {
           final measure = p.entry.valuationMeasure?.name;
           return measure == null
               ? 'Per whatever the source measured this by.'
@@ -328,18 +391,26 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
         return missingPerUnitReason(p, unitName);
       },
     ),
-    if (everything && modernYear != null)
+    // At every level, and last at Basics: what one comparable unit would
+    // cost today is the figure a lay reader most wants.
+    if (modernYear != null)
       EntryColumn(
         id: 'modernPerUnit',
-        label: 'In $modernYear money per $unitName',
-        sortKey: (p) => p.calc.modernPerOutputY,
-        width: 230,
+        label: '$modernYear £ per selected unit',
+        sortKey: (p) => p.modernPerUnit,
+        width: 240,
         numeric: true,
         explanation:
-            'Pence per $unitName, converted to today\'s pounds. The same '
-            'caution applies as to the other modern figure: it shows scale, '
-            'not a valuation.',
-        value: (p) => _pounds(p.calc.modernPerOutputY),
+            'The price in $modernYear pounds (£) according to the "Price '
+            'per" unit chosen above: the column to the left, converted by '
+            'the figure for the entry\'s own year. $setTo Like the other '
+            'modern figure, it shows scale, not a valuation.',
+        value: (p) => _pounds(p.modernPerUnit),
+        cellTooltip: (p) => p.modernPerUnit != null || p.perUnit == null
+            ? null
+            : p.entry.year == null
+            ? 'No year on this entry, so there is no factor to convert by.'
+            : 'No conversion factor for ${p.entry.year}.',
       ),
     if (everything)
       EntryColumn(
@@ -356,7 +427,9 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
       ),
 
     // --------------------------------------------- how it was reached ---
-    if (everything) ...[
+    // From More detail, though the rest of the working waits for Everything:
+    // the metric quantity is the one piece of it a worldbuilder asks for.
+    if (detailed)
       EntryColumn(
         // Not "Total": it is this entry's own quantity restated in metric,
         // which is a different thing from a total sale and was too easily read
@@ -373,6 +446,7 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
             'source calls this column "Total Grams" for all three.',
         value: (p) => _num(p.calc.totalMetric),
       ),
+    if (everything) ...[
       EntryColumn(
         id: 'workers',
         label: 'Workers',
@@ -467,7 +541,10 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
         sortKey: (p) => p.entry.statusInfo,
         width: 220,
         startsGroup: true,
-        explanation: 'Whatever the record noted that fits in no other column.',
+        explanation:
+            'Whatever the record noted that fits in no other column, often '
+            'the form a thing took: seed, old, crannock. Where a record has '
+            'one, a note mark appears beside its item at every detail level.',
         value: (p) => _dash(p.entry.statusInfo),
       ),
       EntryColumn(
@@ -476,8 +553,8 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
         sortKey: (p) => p.entry.food,
         width: 170,
         explanation:
-            'Payment in kind — where the work was paid in bread, '
-            'wine or lodging rather than in coin.',
+            'Beside labour, whether some of the pay was given as food '
+            'rather than coin, and how much, as the record puts it.',
         value: (p) => _dash(p.entry.food),
       ),
       EntryColumn(
@@ -521,14 +598,15 @@ List<EntryColumn> columnsFor(DetailLevel level, String unitName,
             'History of Agriculture and Prices in England, volume 2.',
         value: (p) => _dash(p.entry.sourceCitation),
       ),
-    if (detailed)
+    // Everything only. At More detail it was a column of page numbers nobody
+    // reading there was going to look up, in width the modern figures use.
+    if (everything)
       EntryColumn(
         id: 'page',
         label: 'Page',
         sortKey: (p) => p.entry.page,
         width: 92,
         numeric: true,
-        startsGroup: !everything,
         explanation: 'The page of that work the entry was read off.',
         value: (p) => _dash(p.entry.page),
       ),

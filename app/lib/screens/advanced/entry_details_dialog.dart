@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../state/app_controller.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
 import '../../widgets/item_label.dart';
+import '../../widgets/record_notes.dart';
 import 'entry_columns.dart';
+import '../../widgets/app_selection.dart';
 
 /// What one record says, with nothing editable on it.
 ///
@@ -47,45 +51,79 @@ class _EntryDetailsDialog extends StatelessWidget {
     // The action column and the info button have nothing to read, and the
     // item is already the dialog's title — repeating it as a field says the
     // same thing twice in the first two lines.
-    final columns = columnsFor(level, unitName)
-        .where((c) => c.sortKey != null && c.id != 'item')
-        .toList();
+    // The modern year too, or the dialog quietly drops the two modern figures
+    // the row it was opened from is showing.
+    final columns = columnsFor(
+      level,
+      unitName,
+      modernYear: context.read<AppController>().repository.modernMoneyYear,
+      counts: context.read<AppController>().repository.entryCounts,
+    ).where((c) => c.sortKey != null && c.id != 'item').toList();
+
+    // Below Everything the notes have no column, so they are written out
+    // here in full. The table can only hint at them with a mark; this is
+    // where a sentence of them has room.
+    final notes = level.isEverything
+        ? const <(String, String)>[]
+        : recordNotes(priced.entry);
 
     return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 620, maxHeight: 700),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _header(context, scheme, theme),
-            const Divider(height: 1),
-            Flexible(
-              child: ListView(
+      child: AppSelection(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620, maxHeight: 700),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _header(context, scheme, theme),
+              const Divider(height: 1),
+              Flexible(
                 // Sized to what the record actually says. At Basics a record
                 // is five lines, and a dialog stretched to 700px around them
-                // reads as something that failed to load.
-                shrinkWrap: true,
-                padding: const EdgeInsets.fromLTRB(
-                    Spacing.lg, Spacing.md, Spacing.lg, Spacing.md),
-                children: [
-                  for (var i = 0; i < columns.length; i++) ...[
-                    // The table's own grouping — when and where, what it was,
-                    // what it cost — carried across so a record reads in the
-                    // same order in both places.
-                    if (columns[i].startsGroup && i != 0)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: Spacing.sm),
-                        child: Divider(height: 1),
-                      ),
-                    _Field(column: columns[i], priced: priced),
-                  ],
-                ],
+                // reads as something that failed to load. A scroll view round
+                // a column, not a ListView, so that CopyLayout can sit between
+                // them and a selection copies as label, tab, value.
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(
+                    Spacing.lg,
+                    Spacing.md,
+                    Spacing.lg,
+                    Spacing.md,
+                  ),
+                  child: CopyLayout(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var i = 0; i < columns.length; i++) ...[
+                          // The table's own grouping — when and where, what it was,
+                          // what it cost — carried across so a record reads in the
+                          // same order in both places.
+                          if (columns[i].startsGroup && i != 0)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(
+                                vertical: Spacing.sm,
+                              ),
+                              child: Divider(height: 1),
+                            ),
+                          _Field(column: columns[i], priced: priced),
+                        ],
+                        if (notes.isNotEmpty) ...[
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: Spacing.sm),
+                            child: Divider(height: 1),
+                          ),
+                          for (final (label, text) in notes)
+                            _Note(label: label, text: text),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
               ),
-            ),
-            const Divider(height: 1),
-            _footer(context),
-          ],
+              const Divider(height: 1),
+              _footer(context),
+            ],
+          ),
         ),
       ),
     );
@@ -95,7 +133,11 @@ class _EntryDetailsDialog extends StatelessWidget {
     final entry = priced.entry;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-          Spacing.lg, Spacing.md, Spacing.sm, Spacing.md),
+        Spacing.lg,
+        Spacing.md,
+        Spacing.sm,
+        Spacing.md,
+      ),
       child: Row(
         children: [
           Expanded(
@@ -107,9 +149,10 @@ class _EntryDetailsDialog extends StatelessWidget {
                 // is what the record is *about*, and a reader should not have
                 // to hunt for it behind a heading that says "Entry 496".
                 ItemLabel(
-                    entry: entry,
-                    style: theme.textTheme.titleLarge,
-                    emphasise: true),
+                  entry: entry,
+                  style: theme.textTheme.titleLarge,
+                  emphasise: true,
+                ),
                 const SizedBox(height: 2),
                 Text(
                   [
@@ -118,8 +161,9 @@ class _EntryDetailsDialog extends StatelessWidget {
                     if (entry.county != null) entry.county!,
                     'entry ${entry.legacyEntryNo ?? '—'}',
                   ].join(' · '),
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: scheme.onSurfaceVariant),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -128,6 +172,15 @@ class _EntryDetailsDialog extends StatelessWidget {
           // editing mode" — his words, and his placement. It sat in the
           // footer for a while because it read as a footer action; his
           // instruction is the one that counts.
+          // The whole record at once, for the reader who wants it in a
+          // spreadsheet or a document. Dragging over the text works too, and
+          // is the way to take one figure; this is the way to take them all.
+          IconButton(
+            tooltip: 'Copy this record',
+            icon: const Icon(Icons.copy_outlined),
+            onPressed: () => _copy(context),
+          ),
+          const SizedBox(width: Spacing.xs),
           FilledButton.tonalIcon(
             onPressed: () => Navigator.pop(context, true),
             icon: const Icon(Icons.edit_outlined, size: 18),
@@ -144,6 +197,27 @@ class _EntryDetailsDialog extends StatelessWidget {
     );
   }
 
+  void _copy(BuildContext context) {
+    final columns = columnsFor(
+      context.read<ViewPreferences>().detailLevel,
+      unitName,
+      modernYear: context.read<AppController>().repository.modernMoneyYear,
+      counts: context.read<AppController>().repository.entryCounts,
+    );
+    Clipboard.setData(ClipboardData(text: recordsAsText([priced], columns)));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Record copied. It pastes into a spreadsheet as one row, with '
+            'the headings above it.',
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+  }
+
   Widget _footer(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(Spacing.md),
@@ -151,12 +225,13 @@ class _EntryDetailsDialog extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              'Showing what the source records. Nothing here is editable.',
+              'Showing what the source records. Nothing here is editable, but '
+              'all of it can be selected and copied.',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
-
         ],
       ),
     );
@@ -190,8 +265,9 @@ class _Field extends StatelessWidget {
                 Flexible(
                   child: Text(
                     column.label,
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: scheme.onSurfaceVariant),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
                 if (column.explanation != null) ...[
@@ -201,8 +277,11 @@ class _Field extends StatelessWidget {
                     message: column.explanation!,
                     triggerMode: TooltipTriggerMode.tap,
                     showDuration: const Duration(seconds: 12),
-                    child: Icon(Icons.info_outline,
-                        size: 14, color: scheme.onSurfaceVariant),
+                    child: Icon(
+                      Icons.info_outline,
+                      size: 14,
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ],
@@ -214,21 +293,63 @@ class _Field extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                SelectableText(
+                Text(
                   value.isEmpty ? '—' : value,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w500,
-                    fontFeatures:
-                        column.numeric ? const [tabularFigures] : null,
+                    fontFeatures: column.numeric
+                        ? const [tabularFigures]
+                        : null,
                   ),
                 ),
                 if (note != null)
                   Text(
                     note,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: scheme.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One of the record's notes, laid out like a field so it reads as part of
+/// the record rather than as an annotation on it.
+class _Note extends StatelessWidget {
+  const _Note({required this.label, required this.text});
+
+  final String label;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 190,
+            child: Text(
+              label,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(width: Spacing.md),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],

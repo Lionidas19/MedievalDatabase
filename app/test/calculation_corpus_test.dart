@@ -70,10 +70,13 @@ void main() {
   final corpus = _loadCorpus();
 
   test('the corpus is present and complete', () {
-    // 7,501 real entries. The Data sheet runs to 10,379 rows. Two blocks are
-    // skipped on import: 7801 onward, which carry only dropdown defaults, and
-    // entries 7502-7800, which carry a year of 1286 and nothing else at all.
-    expect(corpus.length, 7501,
+    // 7,440 real entries. The Data sheet runs to 10,379 rows. Three blocks
+    // are gone: 7801 onward, which carry only dropdown defaults; 7502-7800,
+    // which carry a year of 1286 and nothing else at all; and 7441-7501,
+    // which carry 1286, wheat and a page number and nothing else, deleted on
+    // the researcher's instruction once he confirmed he had no record to put
+    // in them.
+    expect(corpus.length, 7440,
         reason: 'expected the full database, got ${corpus.length} rows');
   });
 
@@ -135,20 +138,22 @@ void main() {
   });
 
   test('the proportion with no computable price matches the source', () {
-    // 65 of the 7,501 entries cache no pence-per-output-Y. Reproducing that
+    // 4 of the 7,440 entries cache no pence-per-output-Y. Reproducing that
     // exactly is the point: the gap is in the historical record, not in the
     // code.
     //
-    // It has moved twice, and both times for a reason worth recording. 395
+    // It has moved three times, each for a reason worth recording. 395
     // against the August workbook; 364 after importing the researcher's
     // current one, where the sheet had recalculated rows it previously failed
     // on; 65 once the 299 date-only rows stopped being imported at all, since
-    // every one of those was an entry with nothing to price. If it moves
+    // every one of those was an entry with nothing to price; and 4 once the
+    // 61 rows from 7441 were deleted, which were the same kind of thing. The
+    // four that remain are the genuinely unanswerable ones. If it moves
     // again, something in the source moved. Find out what before editing
     // this number.
     final noCachedAnswer =
         corpus.where((r) => r['x_per_y'] == null).length;
-    expect(noCachedAnswer, 65);
+    expect(noCachedAnswer, 4);
 
     final weAlsoHaveNoAnswer = corpus.where((r) {
       if (r['x_per_y'] != null) return false;

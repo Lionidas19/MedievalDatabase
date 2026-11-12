@@ -27,23 +27,23 @@ enum DetailLevel { basics, detailed, everything }
 
 extension DetailLevelLabel on DetailLevel {
   String get label => switch (this) {
-        DetailLevel.basics => 'Basics',
-        DetailLevel.detailed => 'More detail',
-        DetailLevel.everything => 'Everything',
-      };
+    DetailLevel.basics => 'Basics',
+    DetailLevel.detailed => 'More detail',
+    DetailLevel.everything => 'Everything',
+  };
 
   /// Who this level is for, in the brief's own terms.
   String get description => switch (this) {
-        DetailLevel.basics =>
-          'A plain answer: when, where, what, what it cost, and the price per '
-              'unit. Nothing else.',
-        DetailLevel.detailed =>
-          'Adds the recorded quantities, the time of year, and the page each '
-              'entry was read off.',
-        DetailLevel.everything =>
-          'Every recorded field, the measures behind each figure, and how the '
-              'calculation reached its answer.',
-      };
+    DetailLevel.basics =>
+      'A plain answer: when, where, what and how much, what it cost then '
+          'and now, and the price per unit. Nothing else.',
+    DetailLevel.detailed =>
+      'Adds the entry number, the time of year, and the quantity in '
+          'metric.',
+    DetailLevel.everything =>
+      'Every recorded field, the measures behind each figure, and how the '
+          'calculation reached its answer.',
+  };
 
   bool get atLeastDetailed => index >= DetailLevel.detailed.index;
   bool get isEverything => this == DetailLevel.everything;
@@ -58,12 +58,12 @@ enum GroupBy { none, year, county, category, dimension }
 
 extension GroupByLabel on GroupBy {
   String get label => switch (this) {
-        GroupBy.none => 'No grouping',
-        GroupBy.year => 'By year',
-        GroupBy.county => 'By county',
-        GroupBy.category => 'By category',
-        GroupBy.dimension => 'By kind of measure',
-      };
+    GroupBy.none => 'No grouping',
+    GroupBy.year => 'By year',
+    GroupBy.county => 'By county',
+    GroupBy.category => 'By category',
+    GroupBy.dimension => 'By kind of measure',
+  };
 }
 
 /// The palettes on offer.
@@ -71,18 +71,18 @@ enum ThemeVariant { parchment, contrast, plain }
 
 extension ThemeVariantLabel on ThemeVariant {
   String get label => switch (this) {
-        ThemeVariant.parchment => 'Parchment',
-        ThemeVariant.contrast => 'High contrast',
-        ThemeVariant.plain => 'Plain',
-      };
+    ThemeVariant.parchment => 'Parchment',
+    ThemeVariant.contrast => 'High contrast',
+    ThemeVariant.plain => 'Plain',
+  };
 
   String get description => switch (this) {
-        ThemeVariant.parchment => 'Warm leather and ink, the default.',
-        ThemeVariant.contrast =>
-          'Maximum legibility — for projectors, poor screens and tired eyes.',
-        ThemeVariant.plain =>
-          'Neutral greys, for screenshots that have to sit in a paper.',
-      };
+    ThemeVariant.parchment => 'Warm leather and ink, the default.',
+    ThemeVariant.contrast =>
+      'Maximum legibility — for projectors, poor screens and tired eyes.',
+    ThemeVariant.plain =>
+      'Neutral greys, for screenshots that have to sit in a paper.',
+  };
 }
 
 /// Row height in the Explorer.
@@ -96,12 +96,77 @@ extension TableDensityLabel on TableDensity {
   double get rowHeight => this == TableDensity.comfortable ? 52 : 38;
 }
 
+/// The typeface the app reads in.
+///
+/// Offered because the researcher asked for reading aids by name, and because
+/// a table of thousands of records is a great deal of small text. The two
+/// alternatives answer different needs and are not interchangeable:
+///
+/// * Atkinson Hyperlegible was drawn by the Braille Institute for readers
+///   with low vision. Every letter that is easy to mistake for another (I, l
+///   and 1; O and 0; b and d) is made unmistakable, which also happens to be
+///   what a column of medieval place names and figures needs.
+/// * OpenDyslexic weights the bottom of each letter so it cannot be read
+///   upside down or mirrored. Some readers with dyslexia find it a real help
+///   and others find it no better; the evidence is mixed, which is exactly
+///   why it is a choice rather than a default.
+enum ReadingFont { standard, hyperlegible, dyslexic }
+
+extension ReadingFontLabel on ReadingFont {
+  String get label => switch (this) {
+    ReadingFont.standard => 'Standard',
+    ReadingFont.hyperlegible => 'Easy to read',
+    ReadingFont.dyslexic => 'Dyslexia-friendly',
+  };
+
+  String get description => switch (this) {
+    ReadingFont.standard => 'Inter, the usual typeface here.',
+    ReadingFont.hyperlegible =>
+      'Atkinson Hyperlegible, made for readers with low vision. Letters '
+          'that are easy to confuse, such as I, l and 1, look different.',
+    ReadingFont.dyslexic =>
+      'OpenDyslexic, with heavier bottoms to the letters so they are '
+          'harder to flip or mirror. Some readers with dyslexia find it '
+          'helps.',
+  };
+
+  /// The family as declared in pubspec.yaml.
+  String get family => switch (this) {
+    ReadingFont.standard => 'Inter',
+    ReadingFont.hyperlegible => 'Atkinson Hyperlegible',
+    ReadingFont.dyslexic => 'OpenDyslexic',
+  };
+}
+
+/// How large the text is, over and above the browser's own zoom.
+///
+/// Browser zoom already exists, but it enlarges the whole page, so the table
+/// shows fewer rows *and* fewer columns. This enlarges the writing only.
+enum TextSize { standard, larger, largest }
+
+extension TextSizeLabel on TextSize {
+  String get label => switch (this) {
+    TextSize.standard => 'Standard',
+    TextSize.larger => 'Larger',
+    TextSize.largest => 'Largest',
+  };
+
+  double get scale => switch (this) {
+    TextSize.standard => 1.0,
+    TextSize.larger => 1.15,
+    TextSize.largest => 1.3,
+  };
+}
+
 const _kDetail = 'detailLevel';
 const _kGroupBy = 'groupBy';
 const _kThemeMode = 'themeMode';
 const _kVariant = 'themeVariant';
 const _kDensity = 'density';
 const _kGregorian = 'showGregorian';
+const _kFont = 'readingFont';
+const _kTextSize = 'textSize';
+const _kSpacing = 'widerSpacing';
 
 /// Appearance and detail settings, remembered between visits.
 ///
@@ -127,20 +192,35 @@ class ViewPreferences extends ChangeNotifier {
   /// governs display of full dates rather than filtering.
   bool _showGregorian = true;
 
+  ReadingFont _font = ReadingFont.standard;
+  TextSize _textSize = TextSize.standard;
+
+  /// More room between letters, words and lines, to the amounts the W3C's
+  /// text-spacing guidance names. Crowded lines are among the things readers
+  /// with dyslexia most often say make text hard going.
+  bool _widerSpacing = false;
+
   DetailLevel get detailLevel => _detailLevel;
   GroupBy get groupBy => _groupBy;
   ThemeMode get themeMode => _themeMode;
   ThemeVariant get variant => _variant;
   TableDensity get density => _density;
   bool get showGregorian => _showGregorian;
+  ReadingFont get font => _font;
+  TextSize get textSize => _textSize;
+  bool get widerSpacing => _widerSpacing;
 
-  set detailLevel(DetailLevel v) => _set(() => _detailLevel = v, _kDetail, v.name);
+  set detailLevel(DetailLevel v) =>
+      _set(() => _detailLevel = v, _kDetail, v.name);
   set groupBy(GroupBy v) => _set(() => _groupBy = v, _kGroupBy, v.name);
   set themeMode(ThemeMode v) => _set(() => _themeMode = v, _kThemeMode, v.name);
   set variant(ThemeVariant v) => _set(() => _variant = v, _kVariant, v.name);
   set density(TableDensity v) => _set(() => _density = v, _kDensity, v.name);
   set showGregorian(bool v) =>
       _set(() => _showGregorian = v, _kGregorian, '$v');
+  set font(ReadingFont v) => _set(() => _font = v, _kFont, v.name);
+  set textSize(TextSize v) => _set(() => _textSize = v, _kTextSize, v.name);
+  set widerSpacing(bool v) => _set(() => _widerSpacing = v, _kSpacing, '$v');
 
   void _set(VoidCallback apply, String key, String value) {
     apply();
@@ -158,15 +238,44 @@ class ViewPreferences extends ChangeNotifier {
       return fallback;
     }
 
-    _detailLevel = pick(_kDetail, DetailLevel.values, (v) => v.name,
-        DetailLevel.basics);
+    _detailLevel = pick(
+      _kDetail,
+      DetailLevel.values,
+      (v) => v.name,
+      DetailLevel.basics,
+    );
     _groupBy = pick(_kGroupBy, GroupBy.values, (v) => v.name, GroupBy.none);
-    _themeMode =
-        pick(_kThemeMode, ThemeMode.values, (v) => v.name, ThemeMode.system);
+    _themeMode = pick(
+      _kThemeMode,
+      ThemeMode.values,
+      (v) => v.name,
+      ThemeMode.system,
+    );
     _variant = pick(
-        _kVariant, ThemeVariant.values, (v) => v.name, ThemeVariant.parchment);
+      _kVariant,
+      ThemeVariant.values,
+      (v) => v.name,
+      ThemeVariant.parchment,
+    );
     _density = pick(
-        _kDensity, TableDensity.values, (v) => v.name, TableDensity.comfortable);
+      _kDensity,
+      TableDensity.values,
+      (v) => v.name,
+      TableDensity.comfortable,
+    );
     _showGregorian = readPreference(_kGregorian) != 'false';
+    _font = pick(
+      _kFont,
+      ReadingFont.values,
+      (v) => v.name,
+      ReadingFont.standard,
+    );
+    _textSize = pick(
+      _kTextSize,
+      TextSize.values,
+      (v) => v.name,
+      TextSize.standard,
+    );
+    _widerSpacing = readPreference(_kSpacing) == 'true';
   }
 }

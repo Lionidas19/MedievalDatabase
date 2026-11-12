@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 /// A text field with suggestion dropdown that still accepts arbitrary free
 /// text (so editors can either pick an existing lookup value or type a new
@@ -29,9 +30,29 @@ class _AutocompleteFieldState extends State<AutocompleteField> {
   // Held in state rather than rebuilt each time: a controller created in
   // build() would be replaced on every rebuild, discarding whatever the editor
   // had typed, and a FocusNode created there would leak.
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initialValue ?? '');
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialValue ?? '',
+  );
   late final FocusNode _focusNode = FocusNode();
+
+  /// Follows a value changed from outside: picking from the dropdowns beside
+  /// Advanced Search's item box rewrites what the box should say.
+  ///
+  /// That used to be done by keying the field on the choice, which threw the
+  /// whole field away whenever the choice changed, including when the change
+  /// came from this field. Choosing a suggestion therefore destroyed the box
+  /// it was chosen in, and focus fell back to the navigation rail.
+  ///
+  /// Only when the value passed in has changed, and does not already match:
+  /// the round trip from the reader's own typing must not move the caret.
+  @override
+  void didUpdateWidget(AutocompleteField old) {
+    super.didUpdateWidget(old);
+    final next = widget.initialValue ?? '';
+    if (widget.initialValue != old.initialValue && _controller.text != next) {
+      _controller.text = next;
+    }
+  }
 
   @override
   void dispose() {
@@ -48,7 +69,9 @@ class _AutocompleteFieldState extends State<AutocompleteField> {
       optionsBuilder: (value) {
         if (value.text.isEmpty) return widget.suggestions.take(50);
         final q = value.text.toLowerCase();
-        return widget.suggestions.where((s) => s.toLowerCase().contains(q)).take(50);
+        return widget.suggestions
+            .where((s) => s.toLowerCase().contains(q))
+            .take(50);
       },
       onSelected: widget.onChanged,
       fieldViewBuilder: (context, controller, focusNode, onSubmit) {
@@ -68,27 +91,46 @@ class _AutocompleteFieldState extends State<AutocompleteField> {
               // A field with no list to fall back on needs its own way out.
               // Selecting the text and deleting it works, but it is not
               // something a reader thinks to do, and on a phone it is fiddly.
+              // Out of the Tab order: from the keyboard, Ctrl+A and Backspace
+              // do the same, and a stop per cross doubled the walk through
+              // the editor's eleven fields.
               suffixIcon: value.text.isEmpty || !widget.enabled
                   ? null
-                  : IconButton(
-                      icon: const Icon(Icons.close, size: 18),
-                      tooltip: 'Clear',
-                      padding: EdgeInsets.zero,
-                      onPressed: () {
-                        controller.clear();
-                        widget.onChanged('');
-                      },
+                  : ExcludeFocus(
+                      child: IconButton(
+                        icon: const Icon(Icons.close, size: 18),
+                        tooltip: 'Clear',
+                        padding: EdgeInsets.zero,
+                        onPressed: () {
+                          controller.clear();
+                          widget.onChanged('');
+                        },
+                      ),
                     ),
               // Held to the icon's own size, or the button's 48px tap target
               // makes this field taller than the dropdowns beside it.
-              suffixIconConstraints:
-                  const BoxConstraints(minWidth: 36, minHeight: 36),
+              suffixIconConstraints: const BoxConstraints(
+                minWidth: 36,
+                minHeight: 36,
+              ),
             ),
             onChanged: widget.onChanged,
+            // Enter takes the suggestion the arrow keys are on. Without this
+            // the keyboard could move through the list but never choose from
+            // it: Enter left the half-typed text standing, and in Advanced
+            // Search that meant no item was chosen and Generate stayed off.
+            onSubmitted: (_) => onSubmit(),
+            // And stays put afterwards. A text field drops focus on Enter
+            // by default, so after choosing, the next Tab started again from
+            // the top of the page; supplying this skips that.
+            onEditingComplete: () {},
           ),
         );
       },
       optionsViewBuilder: (context, onSelected, options) {
+        // Which suggestion the arrow keys are on. Shown, and kept in view,
+        // or a keyboard reader is choosing blind.
+        final highlighted = AutocompleteHighlightedOption.of(context);
         return Align(
           alignment: Alignment.topLeft,
           child: Material(
@@ -102,10 +144,47 @@ class _AutocompleteFieldState extends State<AutocompleteField> {
                 itemCount: options.length,
                 itemBuilder: (context, i) {
                   final option = options.elementAt(i);
-                  return ListTile(
-                    dense: true,
-                    title: Text(option),
-                    onTap: () => onSelected(option),
+                  final current = i == highlighted;
+                  // A Builder for the row's own context. The one handed to
+                  // itemBuilder belongs to the whole list, and scrolling *that*
+                  // into view centred the entire list instead of the row:
+                  // the menu opened halfway down, away from the first choice.
+                  return Builder(
+                    builder: (row) {
+                      if (current) {
+                        // Moved only when the row would leave the list, past
+                        // either edge; a list that jumps on every keypress
+                        // is as hard to follow as one that never moves.
+                        SchedulerBinding.instance.addPostFrameCallback((_) {
+                          if (!row.mounted) return;
+                          Scrollable.ensureVisible(
+                            row,
+                            alignmentPolicy:
+                                ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+                          );
+                          Scrollable.ensureVisible(
+                            row,
+                            alignmentPolicy: ScrollPositionAlignmentPolicy
+                                .keepVisibleAtStart,
+                          );
+                        });
+                      }
+                      // The arrow keys drive the highlight; the rows never
+                      // need focus. Focusable, Tab fell into the open list,
+                      // closed it, and came back to the box, so the keyboard
+                      // could never leave the field.
+                      return ExcludeFocus(
+                        child: ListTile(
+                          dense: true,
+                          selected: current,
+                          selectedTileColor: Theme.of(
+                            context,
+                          ).colorScheme.primary.withValues(alpha: 0.14),
+                          title: Text(option),
+                          onTap: () => onSelected(option),
+                        ),
+                      );
+                    },
                   );
                 },
               ),
@@ -138,8 +217,13 @@ class NumberField extends StatelessWidget {
     return TextFormField(
       initialValue: initialValue == null
           ? ''
-          : (integer ? initialValue!.toInt().toString() : _trim(initialValue!.toDouble())),
-      keyboardType: TextInputType.numberWithOptions(decimal: !integer, signed: true),
+          : (integer
+                ? initialValue!.toInt().toString()
+                : _trim(initialValue!.toDouble())),
+      keyboardType: TextInputType.numberWithOptions(
+        decimal: !integer,
+        signed: true,
+      ),
       decoration: InputDecoration(labelText: label),
       onChanged: (text) {
         if (text.trim().isEmpty) {

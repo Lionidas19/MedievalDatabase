@@ -48,19 +48,34 @@ class AppTheme {
     required ThemeVariant variant,
     required Brightness brightness,
     TableDensity density = TableDensity.comfortable,
+    ReadingFont font = ReadingFont.standard,
+    bool widerSpacing = false,
   }) {
-    final key = '${variant.name}.${brightness.name}.${density.name}';
-    return _cache[key] ??= _build(variant, brightness, density);
+    final key =
+        '${variant.name}.${brightness.name}.${density.name}.'
+        '${font.name}.$widerSpacing';
+    return _cache[key] ??= _build(
+      variant,
+      brightness,
+      density,
+      font,
+      widerSpacing,
+    );
   }
 
   static ThemeData _build(
-      ThemeVariant variant, Brightness brightness, TableDensity density) {
+    ThemeVariant variant,
+    Brightness brightness,
+    TableDensity density,
+    ReadingFont font,
+    bool widerSpacing,
+  ) {
     final (scheme, textColor) = switch (variant) {
       ThemeVariant.parchment => _parchment(brightness),
       ThemeVariant.contrast => _contrast(brightness),
       ThemeVariant.plain => _plain(brightness),
     };
-    return _themeFrom(scheme, textColor, variant, density);
+    return _themeFrom(scheme, textColor, variant, density, font, widerSpacing);
   }
 
   // ------------------------------------------------------------- palettes --
@@ -70,30 +85,32 @@ class AppTheme {
 
   static (ColorScheme, Color) _parchment(Brightness brightness) {
     if (brightness == Brightness.light) {
-      final scheme = ColorScheme.fromSeed(
-        seedColor: _parchmentSeed,
-        brightness: Brightness.light,
-      ).copyWith(
-        surface: const Color(0xFFFBF6EC),
-        surfaceContainerLowest: const Color(0xFFFFFDF8),
-        surfaceContainerLow: const Color(0xFFF6EFE0),
-        surfaceContainer: const Color(0xFFF0E6D2),
-        surfaceContainerHigh: const Color(0xFFE9DCC2),
-        surfaceContainerHighest: const Color(0xFFE1D2B3),
-      );
+      final scheme =
+          ColorScheme.fromSeed(
+            seedColor: _parchmentSeed,
+            brightness: Brightness.light,
+          ).copyWith(
+            surface: const Color(0xFFFBF6EC),
+            surfaceContainerLowest: const Color(0xFFFFFDF8),
+            surfaceContainerLow: const Color(0xFFF6EFE0),
+            surfaceContainer: const Color(0xFFF0E6D2),
+            surfaceContainerHigh: const Color(0xFFE9DCC2),
+            surfaceContainerHighest: const Color(0xFFE1D2B3),
+          );
       return (scheme, _ink);
     }
-    final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFFC9A46A),
-      brightness: Brightness.dark,
-    ).copyWith(
-      surface: const Color(0xFF17140F),
-      surfaceContainerLowest: const Color(0xFF0F0D0A),
-      surfaceContainerLow: const Color(0xFF1C1812),
-      surfaceContainer: const Color(0xFF221D15),
-      surfaceContainerHigh: const Color(0xFF2A2419),
-      surfaceContainerHighest: const Color(0xFF322B1E),
-    );
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: const Color(0xFFC9A46A),
+          brightness: Brightness.dark,
+        ).copyWith(
+          surface: const Color(0xFF17140F),
+          surfaceContainerLowest: const Color(0xFF0F0D0A),
+          surfaceContainerLow: const Color(0xFF1C1812),
+          surfaceContainer: const Color(0xFF221D15),
+          surfaceContainerHigh: const Color(0xFF2A2419),
+          surfaceContainerHighest: const Color(0xFF322B1E),
+        );
     return (scheme, const Color(0xFFEFE6D6));
   }
 
@@ -105,38 +122,40 @@ class AppTheme {
   /// plain black behind the text, not a shade of it.
   static (ColorScheme, Color) _contrast(Brightness brightness) {
     if (brightness == Brightness.light) {
-      final scheme = ColorScheme.fromSeed(
-        seedColor: const Color(0xFF00458F),
-        brightness: Brightness.light,
-        contrastLevel: 1.0,
-      ).copyWith(
-        surface: const Color(0xFFFFFFFF),
-        surfaceContainerLowest: const Color(0xFFFFFFFF),
-        surfaceContainerLow: const Color(0xFFF4F4F4),
-        surfaceContainer: const Color(0xFFEDEDED),
-        surfaceContainerHigh: const Color(0xFFE0E0E0),
-        surfaceContainerHighest: const Color(0xFFD4D4D4),
-        outline: const Color(0xFF3A3A3A),
-        outlineVariant: const Color(0xFF767676),
-        onSurfaceVariant: const Color(0xFF2A2A2A),
-      );
+      final scheme =
+          ColorScheme.fromSeed(
+            seedColor: const Color(0xFF00458F),
+            brightness: Brightness.light,
+            contrastLevel: 1.0,
+          ).copyWith(
+            surface: const Color(0xFFFFFFFF),
+            surfaceContainerLowest: const Color(0xFFFFFFFF),
+            surfaceContainerLow: const Color(0xFFF4F4F4),
+            surfaceContainer: const Color(0xFFEDEDED),
+            surfaceContainerHigh: const Color(0xFFE0E0E0),
+            surfaceContainerHighest: const Color(0xFFD4D4D4),
+            outline: const Color(0xFF3A3A3A),
+            outlineVariant: const Color(0xFF767676),
+            onSurfaceVariant: const Color(0xFF2A2A2A),
+          );
       return (scheme, const Color(0xFF000000));
     }
-    final scheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF9FC7FF),
-      brightness: Brightness.dark,
-      contrastLevel: 1.0,
-    ).copyWith(
-      surface: const Color(0xFF000000),
-      surfaceContainerLowest: const Color(0xFF000000),
-      surfaceContainerLow: const Color(0xFF121212),
-      surfaceContainer: const Color(0xFF1A1A1A),
-      surfaceContainerHigh: const Color(0xFF262626),
-      surfaceContainerHighest: const Color(0xFF333333),
-      outline: const Color(0xFFC8C8C8),
-      outlineVariant: const Color(0xFF8C8C8C),
-      onSurfaceVariant: const Color(0xFFE4E4E4),
-    );
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: const Color(0xFF9FC7FF),
+          brightness: Brightness.dark,
+          contrastLevel: 1.0,
+        ).copyWith(
+          surface: const Color(0xFF000000),
+          surfaceContainerLowest: const Color(0xFF000000),
+          surfaceContainerLow: const Color(0xFF121212),
+          surfaceContainer: const Color(0xFF1A1A1A),
+          surfaceContainerHigh: const Color(0xFF262626),
+          surfaceContainerHighest: const Color(0xFF333333),
+          outline: const Color(0xFFC8C8C8),
+          outlineVariant: const Color(0xFF8C8C8C),
+          onSurfaceVariant: const Color(0xFFE4E4E4),
+        );
     return (scheme, const Color(0xFFFFFFFF));
   }
 
@@ -149,17 +168,55 @@ class AppTheme {
       scheme,
       brightness == Brightness.light
           ? const Color(0xFF1B1D20)
-          : const Color(0xFFE6E8EB)
+          : const Color(0xFFE6E8EB),
     );
   }
 
   // ---------------------------------------------------------------- build --
+
+  /// Every style with the wider spacing added, or unchanged without it.
+  ///
+  /// Added style by style rather than through `TextTheme.apply`, which
+  /// asserts on any style whose letter spacing or line height Material left
+  /// unset, and several are. Unset is read as nought and as the typeface's
+  /// own line height, near enough 1.2.
+  ///
+  /// The letter spacing is a little under the W3C's eighth of a size. At the
+  /// full amount OpenDyslexic, which is already wide, came apart into single
+  /// letters, and that is the typeface most likely to be chosen with this.
+  static TextTheme _spaced(TextTheme t, bool wider) {
+    if (!wider) return t;
+    TextStyle? s(TextStyle? style) => style?.copyWith(
+      letterSpacing: (style.letterSpacing ?? 0) + 1.2,
+      wordSpacing: (style.wordSpacing ?? 0) + 2.2,
+      height: (style.height ?? 1.2) + 0.25,
+    );
+    return TextTheme(
+      displayLarge: s(t.displayLarge),
+      displayMedium: s(t.displayMedium),
+      displaySmall: s(t.displaySmall),
+      headlineLarge: s(t.headlineLarge),
+      headlineMedium: s(t.headlineMedium),
+      headlineSmall: s(t.headlineSmall),
+      titleLarge: s(t.titleLarge),
+      titleMedium: s(t.titleMedium),
+      titleSmall: s(t.titleSmall),
+      bodyLarge: s(t.bodyLarge),
+      bodyMedium: s(t.bodyMedium),
+      bodySmall: s(t.bodySmall),
+      labelLarge: s(t.labelLarge),
+      labelMedium: s(t.labelMedium),
+      labelSmall: s(t.labelSmall),
+    );
+  }
 
   static ThemeData _themeFrom(
     ColorScheme scheme,
     Color textColor,
     ThemeVariant variant,
     TableDensity density,
+    ReadingFont font,
+    bool widerSpacing,
   ) {
     // fontFamily on the ThemeData itself, not only on the text styles: the
     // web engine downloads Roboto as its fallback for anything left on the
@@ -168,7 +225,7 @@ class AppTheme {
     final base = ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
-      fontFamily: 'Inter',
+      fontFamily: font.family,
       fontFamilyFallback: const ['Segoe UI', 'Helvetica', 'Arial'],
     );
 
@@ -176,16 +233,24 @@ class AppTheme {
     // startup — see pubspec.yaml. The fallbacks are named anyway: a font asset
     // can fail to decode, and silently rendering nothing would be worse than
     // rendering in the system's own sans.
+    //
+    // Wider spacing is the W3C's text-spacing amounts, near enough: about an
+    // eighth of the type size between letters, a sixth between words, and
+    // lines half as tall again. Added rather than multiplied, because
+    // Material's own letter spacing is close to nothing at body sizes.
     final textTheme = base.textTheme
         .apply(
-          fontFamily: 'Inter',
+          fontFamily: font.family,
           fontFamilyFallback: const ['Segoe UI', 'Helvetica', 'Arial'],
         )
         .apply(bodyColor: textColor, displayColor: textColor);
 
     // Only Parchment mixes a serif in. The other two are chosen for occasions
-    // where the type should not draw attention to itself.
-    final headingFont = variant == ThemeVariant.parchment
+    // where the type should not draw attention to itself. A reader who chose
+    // a reading typeface gets it in the headings too: Spectral is a
+    // decoration, and the headings are the first thing they read.
+    final headingFont =
+        variant == ThemeVariant.parchment && font == ReadingFont.standard
         ? base.textTheme.apply(
             fontFamily: 'Spectral',
             fontFamilyFallback: const ['Georgia', 'Times New Roman'],
@@ -215,14 +280,20 @@ class AppTheme {
 
     return base.copyWith(
       scaffoldBackgroundColor: scheme.surface,
-      visualDensity:
-          compact ? VisualDensity.compact : VisualDensity.standard,
-      textTheme: textTheme.copyWith(
-        headlineLarge: headingFont.headlineLarge?.copyWith(color: textColor),
-        headlineMedium: headingFont.headlineMedium?.copyWith(color: textColor),
-        headlineSmall: headingFont.headlineSmall?.copyWith(color: textColor),
-        titleLarge: headingFont.titleLarge
-            ?.copyWith(color: textColor, fontWeight: FontWeight.w600),
+      visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
+      textTheme: _spaced(
+        textTheme.copyWith(
+          headlineLarge: headingFont.headlineLarge?.copyWith(color: textColor),
+          headlineMedium: headingFont.headlineMedium?.copyWith(
+            color: textColor,
+          ),
+          headlineSmall: headingFont.headlineSmall?.copyWith(color: textColor),
+          titleLarge: headingFont.titleLarge?.copyWith(
+            color: textColor,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        widerSpacing,
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
@@ -259,12 +330,16 @@ class AppTheme {
         radius: const Radius.circular(5),
         // The seed brown rather than a grey: it reads as part of this app, and
         // it holds its own against the warm ground behind it.
-        thumbColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.hovered) || states.contains(WidgetState.dragged)
-                ? scheme.primary
-                : scheme.primary.withValues(alpha: 0.55)),
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) =>
+              states.contains(WidgetState.hovered) ||
+                  states.contains(WidgetState.dragged)
+              ? scheme.primary
+              : scheme.primary.withValues(alpha: 0.55),
+        ),
         trackColor: WidgetStatePropertyAll(
-            scheme.onSurface.withValues(alpha: 0.06)),
+          scheme.onSurface.withValues(alpha: 0.06),
+        ),
         trackBorderColor: const WidgetStatePropertyAll(Colors.transparent),
         crossAxisMargin: 2,
         mainAxisMargin: 2,
@@ -279,12 +354,17 @@ class AppTheme {
         // label now carries the same weight and enough contrast to look
         // pressable; the selected one keeps the filled indicator, so which is
         // which is still obvious.
+        // The family named outright: these styles are the rail's own and do
+        // not inherit the text theme, so a reading typeface stopped short of
+        // the three words a reader uses to move around.
         selectedLabelTextStyle: TextStyle(
+          fontFamily: font.family,
           color: scheme.onSurface,
           fontWeight: FontWeight.w700,
           fontSize: 12,
         ),
         unselectedLabelTextStyle: TextStyle(
+          fontFamily: font.family,
           color: scheme.onSurface,
           fontWeight: FontWeight.w600,
           fontSize: 12,
@@ -325,17 +405,20 @@ class AppTheme {
 /// side were a shift-wheel most people never learn and a scrollbar three
 /// pixels tall.
 ///
-/// A drag still loses the gesture arena to anything that claims the pointer
-/// first, so a click on a row opens it and a drag inside a text field selects
-/// text, both unchanged.
+/// **The table only, never the app.** It was set app-wide once, and then
+/// every page that scrolls took a mouse drag as a scroll before text
+/// selection could see it: the Tutorial page, the record dialog, Advanced
+/// Search. Copying became impossible everywhere except text fields, which is
+/// the thing the researcher most wanted to do. The table, whose text is not
+/// drag-selectable anyway, is the one place it belongs.
 class DragToPanScrollBehavior extends MaterialScrollBehavior {
   const DragToPanScrollBehavior();
 
   @override
   Set<PointerDeviceKind> get dragDevices => {
-        ...super.dragDevices,
-        PointerDeviceKind.mouse,
-      };
+    ...super.dragDevices,
+    PointerDeviceKind.mouse,
+  };
 }
 
 /// Responsive breakpoints shared across the app.

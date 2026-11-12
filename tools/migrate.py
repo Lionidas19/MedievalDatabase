@@ -57,7 +57,104 @@ SHIPPED = os.path.join(
 #
 # A function runs inside the same transaction as everything else here, so a
 # failure half way leaves the file untouched.
+def _drop_unfilled_tail(conn):
+    """Entries 7441 to 7501: a year, wheat and a page number, nothing else.
+
+    61 rows, every one of them identical: 1286, Food / Grain / Wheat, page 27,
+    and no place, no quantity and no price. They are the tail of the Data
+    sheet, where the dropdowns had been filled in but the record never was.
+
+    They were kept at first on the assumption the researcher meant to fill
+    them in through the app. He has now said twice to delete them, so they go.
+    Deleted by what they contain rather than by row number, so the step cannot
+    take a real record if the numbering ever shifts.
+    """
+    doomed = [
+        r[0] for r in conn.execute(
+            """SELECT e.entry_id
+                 FROM price_entries e
+                 LEFT JOIN specifics sp ON sp.specific_id = e.specific_id
+                WHERE e.legacy_entry_no BETWEEN 7441 AND 7501
+                  AND e.place_id IS NULL
+                  AND e.unit_1 IS NULL AND e.unit_2 IS NULL
+                  AND e.unit_3 IS NULL
+                  AND e.pounds IS NULL AND e.shillings IS NULL
+                  AND e.pence IS NULL
+                  AND e.status_info IS NULL AND e.information IS NULL""")
+    ]
+    conn.executemany(
+        "DELETE FROM price_entries WHERE entry_id = ?",
+        [(i,) for i in doomed])
+    # The test oracle is the frozen record of what the spreadsheet computed,
+    # so rows for entries that no longer exist have to go with them or
+    # check_incoming_db.py will report a dangling reference for ever after.
+    conn.executemany(
+        "DELETE FROM excel_cached_calculations WHERE entry_id = ?",
+        [(i,) for i in doomed])
+    print("    removed {} unfilled entries".format(len(doomed)))
+
+
+def _classify_weights_given_in_pounds(conn):
+    """Six measures whose metric value is a weight, left unclassified.
+
+    `Ounce Avdp [1/12 lb]` holds 28.317139 and five `Gallon, X [1 Wine gal
+    [8 lb]]` measures hold 3628.740924. The metric values in this database are
+    grams, and those two numbers are a twelfth of a pound and eight pounds. So
+    the source has already said what kind of thing these measure; the reader
+    in `dimensions.py` simply had no conversion column to read it from.
+
+    This is reading, not guessing. A gallon is a volume by its name, but the
+    source gives this one as a weight, and the metric value is the figure
+    every calculation uses: left as volume it would divide grams by litres.
+    `dimension_source` records it as read rather than guessed for that reason.
+
+    61 of the 64 entries the app reported as resting on an unclassified
+    measure were these. The remaining three use `Skip, Corn (Cumberland)` and
+    `Bula, Lead (Corff Castle)`, which have no metric value at all because
+    nobody knows what they were, and those stay unclassified.
+    """
+    rows = conn.execute(
+        """SELECT measure_id, name FROM measures
+            WHERE dimension IS NULL AND metric_value IS NOT NULL
+              AND (name LIKE '%[8 lb]%' OR name LIKE '%[1/12 lb]%')""").fetchall()
+    conn.executemany(
+        "UPDATE measures SET dimension = 'mass', dimension_source = 'read' "
+        "WHERE measure_id = ?",
+        [(r[0],) for r in rows])
+    print("    classified {} measures as mass: {}".format(
+        len(rows), ", ".join(sorted(r[1] for r in rows))))
+
+
+def _report_in_2017_pounds(conn):
+    """Report modern money in 2017 pounds, not 2026.
+
+    The brief asked for UKP 2026, and the importer derived 2017 -> 2026 at
+    x1.3444 from the workbook's two columns. The researcher has since decided
+    against it: carrying the figures forward means keeping up with inflation
+    for ever, and 2017 is the year the National Archives converter itself
+    reports in. Their words: "let's just use the 2017 numbers and let users
+    figure it out from there".
+
+    Kept as a rebasing of x1 rather than deleted, so the app still reads the
+    year it labels the columns with from the database, and moving to another
+    year later is this same one-row change. The factors themselves are
+    untouched: they were always 2017 pounds.
+    """
+    conn.execute(
+        """UPDATE currency_rebasing
+              SET target_year = base_year, multiplier = 1.0, note = ?
+            WHERE id = 1 AND base_year = 2017""",
+        ("Reported in the base year itself, at the researcher's request: "
+         "no inflation carried forward.",))
+
+
 MIGRATIONS = [
+    (1, "Delete entries 7441-7501, which hold a year and nothing else.",
+     _drop_unfilled_tail),
+    (2, "Classify the six measures whose metric value is stated in pounds.",
+     _classify_weights_given_in_pounds),
+    (3, "Report modern money in 2017 pounds, as the researcher asked.",
+     _report_in_2017_pounds),
 ]
 
 

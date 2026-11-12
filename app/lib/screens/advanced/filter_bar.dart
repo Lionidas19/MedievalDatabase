@@ -8,6 +8,7 @@ import '../../services/pricing.dart';
 import '../../services/statistics.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
+import '../../widgets/autocomplete_field.dart';
 import '../../widgets/filterable_dropdown.dart';
 import '../simple/facets.dart';
 import '../../widgets/info_dot.dart';
@@ -21,10 +22,10 @@ enum DateFilter { any, dated, undated }
 
 extension DateFilterLabel on DateFilter {
   String get label => switch (this) {
-        DateFilter.any => 'Dated and undated',
-        DateFilter.dated => 'Dated only',
-        DateFilter.undated => 'Undated only',
-      };
+    DateFilter.any => 'Dated and undated',
+    DateFilter.dated => 'Dated only',
+    DateFilter.undated => 'Undated only',
+  };
 }
 
 /// Everything the Explorer is currently filtering by.
@@ -32,10 +33,17 @@ extension DateFilterLabel on DateFilter {
 /// Gathered into one object so it can be lifted, compared and cached as a
 /// unit. The table's whole result is memoised against a key built from this,
 /// which only works if "the filters" is one value rather than six fields.
+/// `3482`, `#3482`, `entry 3482`, `no. 3482`, `3480-3490`, `3480 – 3490`.
+/// Group 1 is the prefix, if any; groups 2 and 3 the ends of the run.
+final _entryNumber = RegExp(
+  r'^(#|entry\s*|no\.?\s*)?(\d+)(?:\s*[-–]\s*(\d+))?$',
+);
+
 class FilterState {
   const FilterState({
     this.search = '',
     this.county,
+    this.locality,
     this.category,
     this.dateFilter = DateFilter.any,
     this.years,
@@ -43,6 +51,12 @@ class FilterState {
 
   final String search;
   final String? county;
+
+  /// One settlement, by its exact name. The researcher asked whether the
+  /// table could be searched by village: the search box always matched
+  /// settlement names, but among everything else, so "Ware" also found
+  /// Warehorne and every record with "ware" in its notes.
+  final String? locality;
   final String? category;
   final DateFilter dateFilter;
   final RangeValues? years;
@@ -50,19 +64,21 @@ class FilterState {
   FilterState copyWith({
     String? search,
     String? county,
+    String? locality,
     String? category,
     DateFilter? dateFilter,
     RangeValues? years,
     bool clearCounty = false,
+    bool clearLocality = false,
     bool clearCategory = false,
-  }) =>
-      FilterState(
-        search: search ?? this.search,
-        county: clearCounty ? null : (county ?? this.county),
-        category: clearCategory ? null : (category ?? this.category),
-        dateFilter: dateFilter ?? this.dateFilter,
-        years: years ?? this.years,
-      );
+  }) => FilterState(
+    search: search ?? this.search,
+    county: clearCounty ? null : (county ?? this.county),
+    locality: clearLocality ? null : (locality ?? this.locality),
+    category: clearCategory ? null : (category ?? this.category),
+    dateFilter: dateFilter ?? this.dateFilter,
+    years: years ?? this.years,
+  );
 
   bool passesDate(PriceEntry entry) {
     final year = entry.year;
@@ -88,15 +104,40 @@ class FilterState {
   bool passesSearch(PriceEntry e) {
     final q = search.trim().toLowerCase();
     if (q.isEmpty) return true;
+
+    // Entry numbers, so a record can be found from the row number it has in
+    // the spreadsheet: "3482", "#3482", "entry 3482", or a run "3480-3490".
+    // A bare number also searches the text as usual, since notes like
+    // "44 poles" hold numbers too; the prefixed forms mean the entry alone.
+    final byNumber = _entryNumber.firstMatch(q);
+    if (byNumber != null) {
+      final from = int.parse(byNumber.group(2)!);
+      final to = int.tryParse(byNumber.group(3) ?? '') ?? from;
+      final n = e.legacyEntryNo;
+      if (n != null && n >= from && n <= to) return true;
+      if (byNumber.group(1) != null || byNumber.group(3) != null) return false;
+    }
+
     final hay = [
-      e.locality, e.county, e.category, e.subcategory, e.specific,
-      e.statusInfo, e.information, e.sourceCitation, e.food,
+      e.locality,
+      e.county,
+      e.category,
+      e.subcategory,
+      e.specific,
+      e.statusInfo,
+      e.information,
+      e.sourceCitation,
+      e.food,
     ].where((s) => s != null).join(' ').toLowerCase();
     return hay.contains(q);
   }
 
+  bool passesLocality(PriceEntry e) =>
+      locality == null || e.locality == locality;
+
   bool matches(PriceEntry e) {
     if (!passesSearch(e)) return false;
+    if (!passesLocality(e)) return false;
     if (!passesDate(e)) return false;
     // One option covers every spelling of a county; see [bareCountyName].
     final c = e.county;
@@ -112,12 +153,13 @@ class FilterState {
       years == null || (years!.start <= min && years!.end >= max);
 
   int activeCount(int minYear, int maxYear) => [
-        search.trim().isNotEmpty,
-        county != null,
-        category != null,
-        dateFilter != DateFilter.any,
-        !yearsAreFullRange(minYear, maxYear),
-      ].where((b) => b).length;
+    search.trim().isNotEmpty,
+    county != null,
+    locality != null,
+    category != null,
+    dateFilter != DateFilter.any,
+    !yearsAreFullRange(minYear, maxYear),
+  ].where((b) => b).length;
 }
 
 /// Search, facets, detail level and grouping.
@@ -152,6 +194,8 @@ class FilterBar extends StatefulWidget {
     required this.statsWithEstimates,
     required this.brief,
     required this.onReset,
+    this.searchFocus,
+    this.onSearchSubmitted,
   });
 
   final FilterState filters;
@@ -232,6 +276,13 @@ class FilterBar extends StatefulWidget {
   /// screen for them. This one always is.
   final VoidCallback onReset;
 
+  /// Lets the table send `/` here.
+  final FocusNode? searchFocus;
+
+  /// Enter in the search box: the reader has typed what they wanted and the
+  /// next thing they want is the results, so the keyboard goes there.
+  final VoidCallback? onSearchSubmitted;
+
   @override
   State<FilterBar> createState() => _FilterBarState();
 }
@@ -259,6 +310,13 @@ class _FilterBarState extends State<FilterBar> {
         widget.filters.search != _searchController.text) {
       _searchController.text = widget.filters.search;
     }
+    // The same for the settlement box, whose half-typed text is only ours:
+    // after Reset or Clear all it would otherwise go on saying "No
+    // settlement of that name" under an empty box.
+    if (widget.filters.locality == null &&
+        widget.filters.activeCount(widget.minYear, widget.maxYear) == 0) {
+      _localityText = '';
+    }
   }
 
   @override
@@ -271,8 +329,18 @@ class _FilterBarState extends State<FilterBar> {
   /// Filtering 7,800 entries per keystroke is wasted work at typing speed.
   void _onSearchChanged(String value) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 180),
-        () => widget.onFiltersChanged(_f.copyWith(search: value)));
+    _debounce = Timer(
+      const Duration(milliseconds: 180),
+      () => widget.onFiltersChanged(_f.copyWith(search: value)),
+    );
+  }
+
+  /// Applies the search at once rather than after the pause, so the table
+  /// the keyboard lands in already holds the answer.
+  void _onSearchSubmitted(String value) {
+    _debounce?.cancel();
+    widget.onFiltersChanged(_f.copyWith(search: value));
+    widget.onSearchSubmitted?.call();
   }
 
   /// What each option would still find, memoised.
@@ -286,13 +354,38 @@ class _FilterBarState extends State<FilterBar> {
   String? _facetKey;
   FacetCounts _facetCounts = FacetCounts.empty;
 
+  /// What has been typed into the settlement box, matched or not, so it can
+  /// say when nothing has that name.
+  String _localityText = '';
+
+  /// Settlement names to suggest: those in the chosen county, or all of
+  /// them. Cached, because the panel rebuilds on every keystroke.
+  String? _localitiesKey;
+  List<String> _localityList = const [];
+
+  List<String> _localities() {
+    final key = '${widget.entries.length}|${_f.county}';
+    if (key == _localitiesKey) return _localityList;
+    _localityList = {
+      for (final e in widget.entries)
+        if (e.locality != null &&
+            (_f.county == null ||
+                (e.county != null && bareCountyName(e.county!) == _f.county)))
+          e.locality!,
+    }.toList()..sort();
+    _localitiesKey = key;
+    return _localityList;
+  }
+
   FacetCounts _countFacets() {
-    final years = _f.years ??
+    final years =
+        _f.years ??
         RangeValues(widget.minYear.toDouble(), widget.maxYear.toDouble());
     final key = [
       widget.entries.length,
       _f.search,
       _f.county,
+      _f.locality,
       _f.category,
       _f.dateFilter.name,
       years.start,
@@ -303,7 +396,9 @@ class _FilterBarState extends State<FilterBar> {
     if (key == _facetKey) return _facetCounts;
 
     final searched = widget.entries
-        .where((e) => _f.passesDate(e) && _f.passesSearch(e))
+        .where(
+          (e) => _f.passesDate(e) && _f.passesSearch(e) && _f.passesLocality(e),
+        )
         .toList();
     _facetCounts = countFacets(
       searched,
@@ -332,9 +427,7 @@ class _FilterBarState extends State<FilterBar> {
     return Container(
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLow,
-        border: Border(
-          bottom: BorderSide(color: scheme.outlineVariant),
-        ),
+        border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
       ),
       padding: EdgeInsets.fromLTRB(Spacing.lg, gap, Spacing.lg, gap),
       child: Column(
@@ -351,10 +444,7 @@ class _FilterBarState extends State<FilterBar> {
             SizedBox(height: gap),
             _levelRow(context, prefs),
           ],
-          if (_expanded) ...[
-            SizedBox(height: gap),
-            _facets(context),
-          ],
+          if (_expanded) ...[SizedBox(height: gap), _facets(context)],
           if (active > 0) ...[
             const SizedBox(height: Spacing.sm),
             _activeChips(context),
@@ -364,8 +454,12 @@ class _FilterBarState extends State<FilterBar> {
     );
   }
 
-  Widget _topRow(BuildContext context, ColorScheme scheme, int active,
-      ViewPreferences prefs) {
+  Widget _topRow(
+    BuildContext context,
+    ColorScheme scheme,
+    int active,
+    ViewPreferences prefs,
+  ) {
     // One row on a phone: everything the reader is not using right now is
     // behind the Filters button, which says how much of it is in play.
     if (widget.compact) {
@@ -376,7 +470,9 @@ class _FilterBarState extends State<FilterBar> {
               stop: TourStop.search,
               child: TextField(
                 controller: _searchController,
+                focusNode: widget.searchFocus,
                 onChanged: _onSearchChanged,
+                onSubmitted: _onSearchSubmitted,
                 decoration: const InputDecoration(
                   prefixIcon: Icon(Icons.search, size: 20),
                   hintText: 'Search',
@@ -398,7 +494,9 @@ class _FilterBarState extends State<FilterBar> {
                 tooltip: _expanded ? 'Hide filters' : 'Filters and options',
                 onPressed: () => setState(() => _expanded = !_expanded),
                 icon: Icon(
-                    _expanded ? Icons.expand_less : Icons.tune, size: 20),
+                  _expanded ? Icons.expand_less : Icons.tune,
+                  size: 20,
+                ),
               ),
             ),
           ),
@@ -411,20 +509,31 @@ class _FilterBarState extends State<FilterBar> {
       spacing: Spacing.md,
       runSpacing: Spacing.sm,
       children: [
-        TourTarget(
-          stop: TourStop.search,
-          child: SizedBox(
-          width: 260,
-          child: TextField(
-            controller: _searchController,
-            onChanged: _onSearchChanged,
-            decoration: const InputDecoration(
-              prefixIcon: Icon(Icons.search, size: 20),
-              hintText: 'Search place, item, notes…',
-              isDense: true,
+        // Each (?) follows its own control, in a Row with it so a wrap can
+        // never part them. The Price per one used to come first, which put
+        // it straight after the search box, and it was read as the search
+        // box's.
+        _explained(
+          TourTarget(
+            stop: TourStop.search,
+            child: SizedBox(
+              width: 260,
+              child: TextField(
+                controller: _searchController,
+                focusNode: widget.searchFocus,
+                onChanged: _onSearchChanged,
+                onSubmitted: _onSearchSubmitted,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search, size: 20),
+                  hintText: 'Item, place, entry no.',
+                  isDense: true,
+                ),
+              ),
             ),
           ),
-        )),
+          Explain.search,
+          'the search box',
+        ),
         // The same typing-aware dropdown the Specifics lookup uses.
         //
         // As a bare DropdownMenu this was the single worst control in the
@@ -434,15 +543,15 @@ class _FilterBarState extends State<FilterBar> {
         // still showing everything, and no idea how to get back. Filtering
         // and select-on-focus are what fix that, and both live in the shared
         // widget.
-        InfoDot(message: Explain.pricePer, label: 'Price per'),
-        _pricePerField(context),
+        _explained(_pricePerField(context), Explain.pricePer, 'Price per'),
         TourTarget(
           stop: TourStop.filters,
           child: OutlinedButton.icon(
             onPressed: () => setState(() => _expanded = !_expanded),
             icon: Icon(
-                _expanded ? Icons.expand_less : Icons.filter_alt_outlined,
-                size: 18),
+              _expanded ? Icons.expand_less : Icons.filter_alt_outlined,
+              size: 18,
+            ),
             label: Text(active == 0 ? 'Filters' : 'Filters ($active)'),
           ),
         ),
@@ -471,12 +580,15 @@ class _FilterBarState extends State<FilterBar> {
         // the screen with no explanation — the app looked broken rather than
         // unable to answer. A row of dashes says the figures exist and this
         // selection has none, which is a different and recoverable thing.
-        TextButton.icon(
-          onPressed: widget.onReset,
-          icon: const Icon(Icons.restart_alt, size: 18),
-          label: const Text('Reset'),
+        _explained(
+          TextButton.icon(
+            onPressed: widget.onReset,
+            icon: const Icon(Icons.restart_alt, size: 18),
+            label: const Text('Reset'),
+          ),
+          Explain.reset,
+          'Reset',
         ),
-        InfoDot(message: Explain.reset, label: 'Reset'),
         TourTarget(stop: TourStop.figures, child: _figures(context)),
       ],
     );
@@ -517,103 +629,115 @@ class _FilterBarState extends State<FilterBar> {
     // cannot be expressed in the unit being asked for. Keeping one mark for
     // both would blur the two.
     Widget one(String label, double? value) => Padding(
-          padding: const EdgeInsets.only(right: Spacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(label,
-                  style: theme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                      letterSpacing: 0.4)),
-              Text(
-                value == null ? 'NA' : formatPence(value),
-                style: theme.titleSmall?.copyWith(
-                  fontFeatures: const [tabularFigures],
-                  fontWeight: FontWeight.w600,
-                  color: value == null ? scheme.onSurfaceVariant : null,
-                ),
-              ),
-            ],
+      padding: const EdgeInsets.only(right: Spacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: theme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              letterSpacing: 0.4,
+            ),
           ),
-        );
+          Text(
+            value == null ? 'NA' : formatPence(value),
+            style: theme.titleSmall?.copyWith(
+              fontFeatures: const [tabularFigures],
+              fontWeight: FontWeight.w600,
+              color: value == null ? scheme.onSurfaceVariant : null,
+            ),
+          ),
+        ],
+      ),
+    );
 
     Widget headline(PriceStats s) => Padding(
-          padding: const EdgeInsets.only(right: Spacing.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('MEDIAN',
-                  style: theme.labelSmall?.copyWith(
-                      color: scheme.primary,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8)),
-              Text(
-                s.median == null ? 'NA' : formatPence(s.median),
-                style: theme.headlineSmall?.copyWith(
-                  color: s.median == null
-                      ? scheme.onSurfaceVariant
-                      : scheme.primary,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const [tabularFigures],
-                ),
-              ),
-            ],
+      padding: const EdgeInsets.only(right: Spacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'MEDIAN',
+            style: theme.labelSmall?.copyWith(
+              color: scheme.primary,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
           ),
-        );
+          Text(
+            s.median == null ? 'NA' : formatPence(s.median),
+            style: theme.headlineSmall?.copyWith(
+              color: s.median == null
+                  ? scheme.onSurfaceVariant
+                  : scheme.primary,
+              fontWeight: FontWeight.w700,
+              fontFeatures: const [tabularFigures],
+            ),
+          ),
+        ],
+      ),
+    );
 
     Widget group(PriceStats s, {String? prefix}) => Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (prefix != null)
-              Padding(
-                padding: const EdgeInsets.only(right: Spacing.sm, bottom: 2),
-                child: Text(prefix,
-                    style: theme.labelMedium
-                        ?.copyWith(color: scheme.onSurfaceVariant)),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (prefix != null)
+          Padding(
+            padding: const EdgeInsets.only(right: Spacing.sm, bottom: 2),
+            child: Text(
+              prefix,
+              style: theme.labelMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
               ),
-            headline(s),
-            one('mean', s.mean),
-            // A phone gets the median, the mean and the sample size. Five
-            // figures across 380px wrap onto three lines and the panel then
-            // costs more height than the records it is describing.
-            if (!widget.compact) one('mode', s.mode),
-            if (!widget.brief && !widget.compact) one('lowest', s.lowest),
-            if (!widget.brief && !widget.compact) one('highest', s.highest),
-            // `Flexible` has to be a direct child of the Row. It was inside
-            // the Padding, which is a ParentDataWidget error: in a release
-            // build Flutter paints a failed widget as a plain grey box, so
-            // the whole toolbar and the table under it disappeared behind
-            // one. It only showed on the path where nothing can be priced,
-            // which is the very case this message exists to explain.
-            if (s.isEmpty)
-              Flexible(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 2),
-                  child: Text(
-                    'none of these can be priced per '
-                    '${widget.outputUnit?.name ?? 'that unit'}',
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.bodySmall?.copyWith(color: scheme.error),
-                  ),
-                ),
-              )
-            else
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text('of ${s.count}',
-                    style: theme.bodySmall
-                        ?.copyWith(color: scheme.onSurfaceVariant)),
+            ),
+          ),
+        headline(s),
+        one('mean', s.mean),
+        // A phone gets the median, the mean and the sample size. Five
+        // figures across 380px wrap onto three lines and the panel then
+        // costs more height than the records it is describing.
+        if (!widget.compact) one('mode', s.mode),
+        if (!widget.brief && !widget.compact) one('lowest', s.lowest),
+        if (!widget.brief && !widget.compact) one('highest', s.highest),
+        // `Flexible` has to be a direct child of the Row. It was inside
+        // the Padding, which is a ParentDataWidget error: in a release
+        // build Flutter paints a failed widget as a plain grey box, so
+        // the whole toolbar and the table under it disappeared behind
+        // one. It only showed on the path where nothing can be priced,
+        // which is the very case this message exists to explain.
+        if (s.isEmpty)
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(
+                'none of these can be priced per '
+                '${widget.outputUnit?.name ?? 'that unit'}',
+                overflow: TextOverflow.ellipsis,
+                style: theme.bodySmall?.copyWith(color: scheme.error),
               ),
-          ],
-        );
+            ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Text(
+              'of ${s.count}',
+              style: theme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+      ],
+    );
 
     final withEstimates = widget.statsWithEstimates;
     return Container(
       padding: const EdgeInsets.symmetric(
-          horizontal: Spacing.md, vertical: Spacing.sm),
+        horizontal: Spacing.md,
+        vertical: Spacing.sm,
+      ),
       decoration: BoxDecoration(
         color: scheme.primaryContainer.withValues(alpha: 0.45),
         borderRadius: BorderRadius.circular(Radii.md),
@@ -627,13 +751,16 @@ class _FilterBarState extends State<FilterBar> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Flexible(
-                child: group(widget.stats,
-                    prefix: withEstimates == null ? null : 'recorded'),
+                child: group(
+                  widget.stats,
+                  prefix: withEstimates == null ? null : 'recorded',
+                ),
               ),
               InfoDot(message: Explain.figures, label: 'these figures'),
             ],
           ),
-          if (withEstimates != null) group(withEstimates, prefix: 'with estimates'),
+          if (withEstimates != null)
+            group(withEstimates, prefix: 'with estimates'),
           // Priced by each entry's own measure, these figures average
           // quarters against days against stones. Each row is sound on its
           // own; a median across them is not, and saying so is the only
@@ -656,66 +783,77 @@ class _FilterBarState extends State<FilterBar> {
     return TourTarget(
       stop: TourStop.detailLevels,
       child: Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: Spacing.md,
-      runSpacing: Spacing.sm,
-      children: [
-        Text('Show', style: Theme.of(context).textTheme.labelLarge),
-        for (final level in DetailLevel.values)
-          Tooltip(
-            constraints: const BoxConstraints(maxWidth: 380),
-            message: level.description,
-            child: ChoiceChip(
-              label: Text(level.label),
-              selected: prefs.detailLevel == level,
-              showCheckmark: false,
-              onSelected: (_) => prefs.detailLevel = level,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: Spacing.md,
+        runSpacing: Spacing.sm,
+        children: [
+          Text('Show', style: Theme.of(context).textTheme.labelLarge),
+          for (final level in DetailLevel.values)
+            Tooltip(
+              constraints: const BoxConstraints(maxWidth: 380),
+              message: level.description,
+              child: ChoiceChip(
+                label: Text(level.label),
+                selected: prefs.detailLevel == level,
+                showCheckmark: false,
+                onSelected: (_) => prefs.detailLevel = level,
+              ),
             ),
-          ),
-        const SizedBox(width: Spacing.sm),
-        _estimateChip(context),
-        const SizedBox(width: Spacing.sm),
-        _groupMenu(context, prefs: prefs),
-        if (prefs.detailLevel.isEverything) ...[
           const SizedBox(width: Spacing.sm),
-          OutlinedButton.icon(
-            onPressed: widget.onNewEntry,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('New entry'),
-          ),
+          _estimateChip(context),
+          const SizedBox(width: Spacing.sm),
+          _groupMenu(context, prefs: prefs),
+          if (prefs.detailLevel.isEverything) ...[
+            const SizedBox(width: Spacing.sm),
+            OutlinedButton.icon(
+              onPressed: widget.onNewEntry,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('New entry'),
+            ),
+          ],
         ],
-      ],
-    ));
+      ),
+    );
   }
 
   /// Deliberately a chip rather than one of the detail levels: those choose how
   /// much of the record to show, this one adds figures the record does not
   /// contain, and the two should not look alike.
+  ///
+  /// Its explanation is a (?) beside it, which the researcher asked for,
+  /// rather than the hover tooltip it had. That tooltip also said estimates
+  /// were "never counted in any average", which stopped being true when the
+  /// figures began showing a second line with them counted.
   Widget _estimateChip(BuildContext context) {
-    return Tooltip(
-          constraints: const BoxConstraints(maxWidth: 380),
-          message: widget.estimating
-              ? 'Empty prices are filled with a guess from the trend across '
-                  'neighbouring years, shown in italics with a tilde. No '
-                  'average or median includes them.'
-              : 'Fill empty prices with a guess drawn from the trend across '
-                  'neighbouring years for the same kind of goods. Estimates '
-                  'are marked, and never counted in any average.',
-          child: FilterChip(
-            avatar: Icon(
-              widget.estimating ? Icons.timeline : Icons.timeline_outlined,
-              size: 17,
-            ),
-            label: Text(widget.estimating && widget.estimateCount > 0
-                ? 'Estimates (${widget.estimateCount})'
-                : widget.dense
-                    ? 'Estimate'
-                    : 'Estimate gaps'),
-            selected: widget.estimating,
-            onSelected: widget.onEstimatingChanged,
-          ),
-        );
+    return _explained(
+      FilterChip(
+        avatar: Icon(
+          widget.estimating ? Icons.timeline : Icons.timeline_outlined,
+          size: 17,
+        ),
+        label: Text(
+          widget.estimating && widget.estimateCount > 0
+              ? 'Estimates (${widget.estimateCount})'
+              : widget.dense
+              ? 'Estimate'
+              : 'Estimate gaps',
+        ),
+        selected: widget.estimating,
+        onSelected: widget.onEstimatingChanged,
+      ),
+      Explain.estimates,
+      'Estimate gaps',
+    );
   }
+
+  /// A control with its (?) after it, kept on one line together.
+  static Widget _explained(Widget control, String message, String label) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      control,
+      InfoDot(message: message, label: label),
+    ],
+  );
 
   /// The output unit. One definition, used by the bar and by the phone's
   /// filter panel, so the two can never drift apart.
@@ -723,9 +861,8 @@ class _FilterBarState extends State<FilterBar> {
     return TourTarget(
       stop: TourStop.pricePer,
       child: FilterableDropdown<MetricItem?>(
-        // Wide enough for 'Default (Heads/Unit/Kilograms)', which is the
+        // Wide enough for 'The measure each record used', which is the
         // label the control opens on and so the one it must be able to show.
-        // His phrase, kept verbatim, because it is the one he will look for.
         width: 324,
         value: widget.outputUnit,
         label: 'Price per',
@@ -737,9 +874,7 @@ class _FilterBarState extends State<FilterBar> {
         // labour counted by the day can never be priced by the metre.
         entries: facetEntries<MetricItem?>(
           context,
-          options: [
-            for (final u in widget.outputUnits) (u, u.menuLabel),
-          ],
+          options: [for (final u in widget.outputUnits) (u, u.menuLabel)],
           available: (u) => _countFacets().canPriceIn(u?.dimension),
           selected: widget.outputUnit,
         ),
@@ -767,7 +902,8 @@ class _FilterBarState extends State<FilterBar> {
   Widget _facets(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final counts = _countFacets();
-    final years = _f.years ??
+    final years =
+        _f.years ??
         RangeValues(widget.minYear.toDouble(), widget.maxYear.toDouble());
 
     return Container(
@@ -814,18 +950,50 @@ class _FilterBarState extends State<FilterBar> {
             label: 'County',
             hint: 'type a county',
             value: _f.county,
-            onSelected: (v) => widget.onFiltersChanged(v == null
-                ? _f.copyWith(clearCounty: true)
-                : _f.copyWith(county: v)),
+            // A settlement belongs to one county, so a new county lets go of
+            // it rather than leaving a filter that can match nothing.
+            onSelected: (v) => widget.onFiltersChanged(
+              v == null
+                  ? _f.copyWith(clearCounty: true, clearLocality: true)
+                  : _f.copyWith(county: v, clearLocality: true),
+            ),
             entries: facetEntries<String?>(
               context,
               anyOption: const DropdownMenuEntry(
-                  value: null, label: 'Any county'),
+                value: null,
+                label: 'Any county',
+              ),
               options: [for (final c in widget.counties) (c, c)],
               available: (c) => counts.counties.containsKey(c),
               priceable: (c) => (counts.counties[c]?.priced ?? 0) > 0,
               unitName: widget.outputUnit?.name,
               selected: _f.county,
+            ),
+          ),
+          // Typed, not picked: there are hundreds of settlements, and a
+          // DropdownMenu builds every entry up front (see CLAUDE.md, "Never
+          // put a long list in a DropdownMenu"). Only an exact name filters,
+          // so half-typed text never quietly empties the table.
+          SizedBox(
+            width: 210,
+            child: AutocompleteField(
+              label: 'Settlement',
+              initialValue: _f.locality ?? '',
+              suggestions: _localities(),
+              helperText: _localityText.trim().isNotEmpty && _f.locality == null
+                  ? 'No settlement of that name'
+                  : null,
+              onChanged: (text) {
+                setState(() => _localityText = text);
+                final match = _localities().contains(text) ? text : null;
+                if (match != _f.locality) {
+                  widget.onFiltersChanged(
+                    match == null
+                        ? _f.copyWith(clearLocality: true)
+                        : _f.copyWith(locality: match),
+                  );
+                }
+              },
             ),
           ),
           FilterableDropdown<String?>(
@@ -835,13 +1003,17 @@ class _FilterBarState extends State<FilterBar> {
             label: 'Category',
             hint: 'type a category',
             value: _f.category,
-            onSelected: (v) => widget.onFiltersChanged(v == null
-                ? _f.copyWith(clearCategory: true)
-                : _f.copyWith(category: v)),
+            onSelected: (v) => widget.onFiltersChanged(
+              v == null
+                  ? _f.copyWith(clearCategory: true)
+                  : _f.copyWith(category: v),
+            ),
             entries: facetEntries<String?>(
               context,
               anyOption: const DropdownMenuEntry(
-                  value: null, label: 'Any category'),
+                value: null,
+                label: 'Any category',
+              ),
               options: [for (final c in widget.categories) (c, c)],
               available: (c) => counts.categories.containsKey(c),
               priceable: (c) => (counts.categories[c]?.priced ?? 0) > 0,
@@ -857,40 +1029,57 @@ class _FilterBarState extends State<FilterBar> {
             onSelected: (v) =>
                 widget.onFiltersChanged(_f.copyWith(dateFilter: v)),
             entries: DateFilter.values
-                .map((d) => DropdownMenuEntry(
-                      value: d,
-                      label: d == DateFilter.undated
-                          ? '${d.label} (${widget.undatedTotal})'
-                          : d.label,
-                    ))
+                .map(
+                  (d) => DropdownMenuEntry(
+                    value: d,
+                    label: d == DateFilter.undated
+                        ? '${d.label} (${widget.undatedTotal})'
+                        : d.label,
+                  ),
+                )
                 .toList(),
           ),
           SizedBox(
             width: 280,
             child: Row(
               children: [
-                Text('${years.start.round()}',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(fontFeatures: const [tabularFigures])),
+                Text(
+                  '${years.start.round()}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontFeatures: const [tabularFigures],
+                  ),
+                ),
                 Expanded(
                   child: RangeSlider(
                     min: widget.minYear.toDouble(),
                     max: widget.maxYear.toDouble(),
+                    // Whole years only. It used to slide freely while the
+                    // labels either side rounded, so two positions could both
+                    // read 1282 and filter differently: 1282.4 lets 1282 in
+                    // and 1282.6 does not. The researcher caught it from two
+                    // screenshots that looked identical and disagreed.
+                    divisions: widget.maxYear - widget.minYear,
                     values: years,
                     // The slider can only speak about entries that have a
                     // year, so it is meaningless when showing only undated.
                     onChanged: _f.dateFilter == DateFilter.undated
                         ? null
-                        : (r) => widget.onFiltersChanged(_f.copyWith(years: r)),
+                        : (r) => widget.onFiltersChanged(
+                            _f.copyWith(
+                              years: RangeValues(
+                                r.start.roundToDouble(),
+                                r.end.roundToDouble(),
+                              ),
+                            ),
+                          ),
                   ),
                 ),
-                Text('${years.end.round()}',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(fontFeatures: const [tabularFigures])),
+                Text(
+                  '${years.end.round()}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontFeatures: const [tabularFigures],
+                  ),
+                ),
               ],
             ),
           ),
@@ -907,38 +1096,68 @@ class _FilterBarState extends State<FilterBar> {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         if (_f.search.trim().isNotEmpty)
-          _chip(context, 'matching "${_f.search.trim()}"',
-              () => widget.onFiltersChanged(_f.copyWith(search: ''))),
+          _chip(
+            context,
+            'matching "${_f.search.trim()}"',
+            () => widget.onFiltersChanged(_f.copyWith(search: '')),
+          ),
         if (_f.county != null)
-          _chip(context, _f.county!,
-              () => widget.onFiltersChanged(_f.copyWith(clearCounty: true))),
+          _chip(
+            context,
+            _f.county!,
+            () => widget.onFiltersChanged(_f.copyWith(clearCounty: true)),
+          ),
+        if (_f.locality != null)
+          _chip(
+            context,
+            _f.locality!,
+            () => widget.onFiltersChanged(_f.copyWith(clearLocality: true)),
+          ),
         if (_f.category != null)
-          _chip(context, _f.category!,
-              () => widget.onFiltersChanged(_f.copyWith(clearCategory: true))),
+          _chip(
+            context,
+            _f.category!,
+            () => widget.onFiltersChanged(_f.copyWith(clearCategory: true)),
+          ),
         if (_f.dateFilter != DateFilter.any)
-          _chip(context, _f.dateFilter.label,
-              () => widget.onFiltersChanged(
-                  _f.copyWith(dateFilter: DateFilter.any))),
-        if (years != null && !_f.yearsAreFullRange(widget.minYear, widget.maxYear))
+          _chip(
+            context,
+            _f.dateFilter.label,
+            () => widget.onFiltersChanged(
+              _f.copyWith(dateFilter: DateFilter.any),
+            ),
+          ),
+        if (years != null &&
+            !_f.yearsAreFullRange(widget.minYear, widget.maxYear))
           _chip(
             context,
             '${years.start.round()}–${years.end.round()}',
-            () => widget.onFiltersChanged(_f.copyWith(
+            () => widget.onFiltersChanged(
+              _f.copyWith(
                 years: RangeValues(
-                    widget.minYear.toDouble(), widget.maxYear.toDouble()))),
+                  widget.minYear.toDouble(),
+                  widget.maxYear.toDouble(),
+                ),
+              ),
+            ),
           ),
         TextButton(
-          onPressed: () => widget.onFiltersChanged(FilterState(
-            years: RangeValues(
-                widget.minYear.toDouble(), widget.maxYear.toDouble()),
-          )),
+          onPressed: () => widget.onFiltersChanged(
+            FilterState(
+              years: RangeValues(
+                widget.minYear.toDouble(),
+                widget.maxYear.toDouble(),
+              ),
+            ),
+          ),
           child: const Text('Clear all'),
         ),
         if (widget.undatedTotal > 0 && _f.dateFilter == DateFilter.any)
           Text(
             'including ${widget.undatedTotal} undated',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
       ],
     );

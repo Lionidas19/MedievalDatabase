@@ -225,6 +225,25 @@ class DatabaseRepository {
         return out;
       });
 
+  /// How many entries there are, and how many carry a time of year or a day
+  /// of the month, for the sentences that quote them.
+  ///
+  /// Counted, not written into the text. The explanations once said "363 of
+  /// the 7,800 entries" and "108 of the 7,800" as fixed figures; the
+  /// database fell to 7,440 and the sentences went on saying 7,800. The
+  /// researcher asked whether they would update as he adds entries, and now
+  /// they do: [_invalidate] runs on every write.
+  EntryCounts get entryCounts => _cached('entryCounts', () {
+        final r = _db.select(
+            'SELECT COUNT(*) AS total, COUNT(time_period_id) AS timed, '
+            'COUNT(day_of_month) AS dated FROM price_entries').first;
+        return (
+          total: r['total'] as int,
+          timed: r['timed'] as int,
+          dated: r['dated'] as int,
+        );
+      });
+
   /// The year the modern figures are expressed in, for labelling them.
   ///
   /// Read rather than hard-coded: it is in the database because it changes,

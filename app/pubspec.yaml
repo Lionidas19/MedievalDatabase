@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.0.3+3
+version: 0.0.4+4
 
 environment:
   sdk: ^3.11.4
@@ -73,6 +73,9 @@ flutter:
     # constant in Dart, which is a second place for the version to live and
     # drifts the first time somebody bumps one and forgets the other.
     - pubspec.yaml
+    # The open-font licences, which the SIL licence asks to travel with the
+    # fonts; registered with Flutter's licence list in main.dart.
+    - fonts/licences/
 
   # Bundled, not fetched. The app is meant to work with no internet at all,
   # and a webfont request is a network dependency like any other: offline it
@@ -94,6 +97,20 @@ flutter:
           weight: 400
         - asset: fonts/Spectral-SemiBold.ttf
           weight: 600
+    # Reading aids, chosen in Display. Both under the SIL Open Font
+    # Licence; the licence texts ship beside them in fonts/licences/.
+    - family: Atkinson Hyperlegible
+      fonts:
+        - asset: fonts/AtkinsonHyperlegible-Regular.ttf
+          weight: 400
+        - asset: fonts/AtkinsonHyperlegible-Bold.ttf
+          weight: 700
+    - family: OpenDyslexic
+      fonts:
+        - asset: fonts/OpenDyslexic-Regular.otf
+          weight: 400
+        - asset: fonts/OpenDyslexic-Bold.otf
+          weight: 700
 
   # To add assets to your application, add an assets section, like this:
   # assets:

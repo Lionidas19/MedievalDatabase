@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../state/app_controller.dart';
 import '../state/view_preferences.dart';
 import '../theme.dart';
 
@@ -23,6 +24,7 @@ class _DisplaySettingsDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final prefs = context.watch<ViewPreferences>();
+    final counts = context.read<AppController>().repository.entryCounts;
 
     return Dialog(
       child: ConstrainedBox(
@@ -32,12 +34,18 @@ class _DisplaySettingsDialog extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                  Spacing.xl, Spacing.lg, Spacing.md, Spacing.sm),
+                Spacing.xl,
+                Spacing.lg,
+                Spacing.md,
+                Spacing.sm,
+              ),
               child: Row(
                 children: [
                   Expanded(
-                    child: Text('Display',
-                        style: Theme.of(context).textTheme.titleLarge),
+                    child: Text(
+                      'Display',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
                   ),
                   IconButton(
                     icon: const Icon(Icons.close),
@@ -78,11 +86,17 @@ class _DisplaySettingsDialog extends StatelessWidget {
                     SegmentedButton<ThemeMode>(
                       segments: const [
                         ButtonSegment(
-                            value: ThemeMode.system, label: Text('System')),
+                          value: ThemeMode.system,
+                          label: Text('System'),
+                        ),
                         ButtonSegment(
-                            value: ThemeMode.light, label: Text('Light')),
+                          value: ThemeMode.light,
+                          label: Text('Light'),
+                        ),
                         ButtonSegment(
-                            value: ThemeMode.dark, label: Text('Dark')),
+                          value: ThemeMode.dark,
+                          label: Text('Dark'),
+                        ),
                       ],
                       selected: {prefs.themeMode},
                       showSelectedIcon: false,
@@ -104,6 +118,56 @@ class _DisplaySettingsDialog extends StatelessWidget {
                       ),
                     const SizedBox(height: Spacing.lg),
 
+                    // Reading aids, asked for by the researcher. Each
+                    // typeface's name is set in that typeface, so the choice
+                    // can be judged before it is made.
+                    _heading(context, 'Reading'),
+                    _caption(
+                      context,
+                      'For anyone who finds small or crowded text hard '
+                      'going. These change the writing only, not the layout.',
+                    ),
+                    for (final font in ReadingFont.values)
+                      RadioListTile<ReadingFont>(
+                        contentPadding: EdgeInsets.zero,
+                        value: font,
+                        // ignore: deprecated_member_use
+                        groupValue: prefs.font,
+                        // ignore: deprecated_member_use
+                        onChanged: (v) => prefs.font = v ?? prefs.font,
+                        title: Text(
+                          font.label,
+                          style: TextStyle(fontFamily: font.family),
+                        ),
+                        subtitle: Text(font.description),
+                      ),
+                    const SizedBox(height: Spacing.sm),
+                    Text(
+                      'Text size',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: Spacing.xs),
+                    SegmentedButton<TextSize>(
+                      segments: [
+                        for (final t in TextSize.values)
+                          ButtonSegment(value: t, label: Text(t.label)),
+                      ],
+                      selected: {prefs.textSize},
+                      showSelectedIcon: false,
+                      onSelectionChanged: (s) => prefs.textSize = s.first,
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: prefs.widerSpacing,
+                      onChanged: (v) => prefs.widerSpacing = v,
+                      title: const Text('More space between letters and lines'),
+                      subtitle: const Text(
+                        'Spreads the writing out so lines are less crowded. '
+                        'Long names in the table may be cut short sooner.',
+                      ),
+                    ),
+                    const SizedBox(height: Spacing.lg),
+
                     _heading(context, 'Row height'),
                     const SizedBox(height: Spacing.sm),
                     SegmentedButton<TableDensity>(
@@ -123,11 +187,14 @@ class _DisplaySettingsDialog extends StatelessWidget {
                       value: prefs.showGregorian,
                       onChanged: (v) => prefs.showGregorian = v,
                       title: const Text('Show the modern date alongside'),
-                      subtitle: const Text(
+                      // Counted, not quoted: this said "108 of the 7,800"
+                      // long after there were 7,440.
+                      subtitle: Text(
                         'The accounts are Julian, so a full date in them is '
-                        'seven days behind modern reckoning. Only 108 of the '
-                        '7,800 entries carry a day of the month; a bare year '
-                        'reads the same in either calendar.',
+                        'seven days behind modern reckoning. Only '
+                        '${counts.dated} of the ${counts.total} entries carry '
+                        'a day of the month; a bare year reads the same in '
+                        'either calendar.',
                       ),
                     ),
                   ],
@@ -144,11 +211,12 @@ class _DisplaySettingsDialog extends StatelessWidget {
       Text(text, style: Theme.of(context).textTheme.titleSmall);
 
   Widget _caption(BuildContext context, String text) => Padding(
-        padding: const EdgeInsets.only(top: Spacing.xs),
-        child: Text(
-          text,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant),
-        ),
-      );
+    padding: const EdgeInsets.only(top: Spacing.xs),
+    child: Text(
+      text,
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+    ),
+  );
 }

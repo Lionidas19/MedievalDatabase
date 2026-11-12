@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../models/models.dart';
 import '../../services/pricing.dart';
 import '../../theme.dart';
 import '../../widgets/item_label.dart';
+import '../../widgets/record_notes.dart';
 import 'entry_columns.dart';
 
 /// A run of entries under one heading.
@@ -46,11 +48,15 @@ class EntryTable extends StatefulWidget {
     required this.onRead,
     required this.unitName,
     required this.showGroupHeaders,
+    this.focusNode,
+    this.onFind,
+    this.onCopied,
   });
 
   final List<EntryGroup> groups;
   final List<EntryColumn> columns;
   final double rowHeight;
+
   /// The id of the column being sorted on, or null for none.
   final String? sortColumnId;
   final bool ascending;
@@ -62,6 +68,18 @@ class EntryTable extends StatefulWidget {
   final String unitName;
   final bool showGroupHeaders;
 
+  /// The table's own focus, passed in so the search box can hand the
+  /// keyboard straight back to the results. Owned here when not given.
+  final FocusNode? focusNode;
+
+  /// Called on `/`, the usual key for "take me to the search box".
+  final VoidCallback? onFind;
+
+  /// Called once Ctrl+C has put the highlighted row on the clipboard, so
+  /// the screen can say so. Copying makes no visible change of its own, and
+  /// a key that seems to do nothing gets pressed again and then distrusted.
+  final VoidCallback? onCopied;
+
   @override
   State<EntryTable> createState() => _EntryTableState();
 }
@@ -69,6 +87,51 @@ class EntryTable extends StatefulWidget {
 class _EntryTableState extends State<EntryTable> {
   final _horizontal = ScrollController();
   final _vertical = ScrollController();
+  FocusNode? _ownFocus;
+  FocusNode get _focus =>
+      widget.focusNode ?? (_ownFocus ??= FocusNode(debugLabel: 'entry table'));
+
+  /// The row the keyboard is on, by entry id rather than position, so it
+  /// survives a re-sort or an edit that rebuilds the groups. Null until a key
+  /// is pressed or a row is clicked: nothing is highlighted for a reader who
+  /// only ever uses the mouse.
+  String? _cursorId;
+  bool _focused = false;
+
+  /// Every row in display order, and which group each belongs to. Rebuilt
+  /// only when the groups themselves change, which the Explorer's cache
+  /// keeps rare.
+  List<EntryGroup>? _flatFor;
+  List<PricedEntry> _flat = const [];
+  List<int> _groupOf = const [];
+
+  /// The groups the reader has opened, by label. Everything else is closed.
+  ///
+  /// Closed is where a grouping starts, at the researcher's request: grouped
+  /// by year, the table becomes a column of years with a median on each,
+  /// which is the comparison he wanted ("look at the median price for 1270,
+  /// then deselect to see only 1280"). Before this, grouping put the same
+  /// 7,440 rows on screen with headings among them, and the headings were
+  /// hundreds of rows apart. By label so that an open group stays open
+  /// through a re-sort, a change of unit or an edit; labels from another
+  /// grouping simply never match.
+  final Set<String> _open = {};
+
+  /// Whether a group's rows are shown. Ungrouped, there is one group and no
+  /// heading to open it with, so it is always shown.
+  bool _isOpen(EntryGroup g) =>
+      !widget.showGroupHeaders || _open.contains(g.label);
+
+  void _toggle(EntryGroup g) => setState(() {
+    if (!_open.remove(g.label)) _open.add(g.label);
+    _flatFor = null;
+  });
+
+  void _setAll(bool open) => setState(() {
+    _open.clear();
+    if (open) _open.addAll(widget.groups.map((g) => g.label));
+    _flatFor = null;
+  });
 
   static const _actionsWidth = 52.0;
 
@@ -76,7 +139,59 @@ class _EntryTableState extends State<EntryTable> {
   void dispose() {
     _horizontal.dispose();
     _vertical.dispose();
+    _ownFocus?.dispose();
     super.dispose();
+  }
+
+  void _flatten() {
+    if (identical(_flatFor, widget.groups)) return;
+    _flatFor = widget.groups;
+    // Only the rows on show: the keyboard steps over a closed group the way
+    // the eye does. A closed group still has its heading, which the row
+    // arithmetic below counts through the group's index.
+    _flat = [
+      for (final g in widget.groups)
+        if (_isOpen(g)) ...g.rows,
+    ];
+    _groupOf = [
+      for (final (gi, g) in widget.groups.indexed)
+        if (_isOpen(g))
+          for (var i = 0; i < g.rows.length; i++) gi,
+    ];
+  }
+
+  double get _headingHeight =>
+      widget.showGroupHeaders ? widget.rowHeight * 0.85 : 0;
+
+  /// Where row [index] starts in the list, counting every group heading
+  /// above it: each heading takes its own height before its rows.
+  double _rowTop(int index) =>
+      (_groupOf[index] + 1) * _headingHeight + index * widget.rowHeight;
+
+  /// The first row whose top is in view below the pinned heading. Where the
+  /// cursor starts, so the first keypress lands on what the reader is
+  /// looking at rather than jumping back to the top.
+  int _firstVisibleRow() {
+    final top = _vertical.offset + _headingHeight;
+    for (var i = 0; i < _flat.length; i++) {
+      if (_rowTop(i) >= top - 1) return i;
+    }
+    return _flat.length - 1;
+  }
+
+  /// Scrolls just far enough that row [index] is wholly visible, clear of
+  /// the pinned group heading.
+  void _reveal(int index) {
+    final p = _vertical.position;
+    final top = _rowTop(index);
+    final bottom = top + widget.rowHeight;
+    var target = p.pixels;
+    if (top < p.pixels + _headingHeight) {
+      target = top - _headingHeight;
+    } else if (bottom > p.pixels + p.viewportDimension) {
+      target = bottom - p.viewportDimension;
+    }
+    _vertical.jumpTo(target.clamp(p.minScrollExtent, p.maxScrollExtent));
   }
 
   double get _totalWidth =>
@@ -101,8 +216,7 @@ class _EntryTableState extends State<EntryTable> {
     ];
     if (flexible.isEmpty) return widths;
 
-    final flexTotal =
-        flexible.fold<double>(0, (sum, i) => sum + widths[i]);
+    final flexTotal = flexible.fold<double>(0, (sum, i) => sum + widths[i]);
     for (final i in flexible) {
       widths[i] += slack * widths[i] / flexTotal;
     }
@@ -125,63 +239,215 @@ class _EntryTableState extends State<EntryTable> {
         final width = scrolls ? _totalWidth : constraints.maxWidth;
         final widths = _widths(constraints.maxWidth);
 
-        return Scrollbar(
-          controller: _horizontal,
-          thumbVisibility: scrolls,
-          child: SingleChildScrollView(
+        // The vertical bar wraps the sideways scroll rather than sitting inside
+        // it. Inside, it was drawn at the right-hand edge of the full 3,000px
+        // row, so whenever the table was wider than the window it was off
+        // screen: there exactly when it was needed, and nowhere to be seen.
+        // Out here it is pinned to the window's edge, and listens one level
+        // down, because the list it tracks is nested in the sideways scroll.
+        final table = Scrollbar(
+          controller: _vertical,
+          // Explicit, like its horizontal sibling. Without it the bar shows
+          // only while the list is actually moving, so the one state it never
+          // appears in is the state a reader needs it in: stopped, wondering
+          // whether there is more below.
+          thumbVisibility: true,
+          notificationPredicate: (n) => n.depth == 1,
+          child: Scrollbar(
             controller: _horizontal,
-            scrollDirection: Axis.horizontal,
-            physics: scrolls ? null : const NeverScrollableScrollPhysics(),
-            child: SizedBox(
-              width: width,
-              child: Column(
-                children: [
-                  _header(context, widths),
-                  Divider(height: 1, color: scheme.outlineVariant),
-                  Expanded(
-                    child: Scrollbar(
-                      controller: _vertical,
-                      // Explicit, like its horizontal sibling. Without it the
-                      // bar shows only while the list is actually moving, so
-                      // the one state it never appears in is the state a
-                      // reader needs it in: stopped, wondering whether there
-                      // is more below.
-                      thumbVisibility: true,
-                      child: CustomScrollView(
-                        controller: _vertical,
-                        slivers: [
-                          for (final group in widget.groups)
-                            if (widget.showGroupHeaders)
-                              SliverMainAxisGroup(
-                                slivers: [
-                                  SliverPersistentHeader(
-                                    pinned: true,
-                                    delegate: _GroupHeaderDelegate(
-                                      group: group,
-                                      height: headerHeight,
-                                      unitName: widget.unitName,
-                                      scheme: scheme,
-                                      textTheme: Theme.of(context).textTheme,
-                                      horizontal: _horizontal,
-                                      viewportWidth: constraints.maxWidth,
+            thumbVisibility: scrolls,
+            child: SingleChildScrollView(
+              controller: _horizontal,
+              scrollDirection: Axis.horizontal,
+              physics: scrolls ? null : const NeverScrollableScrollPhysics(),
+              child: SizedBox(
+                width: width,
+                child: Column(
+                  children: [
+                    _header(context, widths),
+                    Divider(height: 1, color: scheme.outlineVariant),
+                    Expanded(
+                      child: ScrollConfiguration(
+                        // No second, automatic bar out at the far edge of the
+                        // row; the one above is the bar for this list.
+                        behavior: const DragToPanScrollBehavior().copyWith(
+                          scrollbars: false,
+                        ),
+                        child: CustomScrollView(
+                          controller: _vertical,
+                          slivers: [
+                            for (final group in widget.groups)
+                              if (widget.showGroupHeaders)
+                                SliverMainAxisGroup(
+                                  slivers: [
+                                    SliverPersistentHeader(
+                                      pinned: true,
+                                      delegate: _GroupHeaderDelegate(
+                                        group: group,
+                                        open: _isOpen(group),
+                                        onToggle: () => _toggle(group),
+                                        height: headerHeight,
+                                        unitName: widget.unitName,
+                                        scheme: scheme,
+                                        textTheme: Theme.of(context).textTheme,
+                                        horizontal: _horizontal,
+                                        viewportWidth: constraints.maxWidth,
+                                      ),
                                     ),
-                                  ),
-                                  _rowsSliver(group, widths),
-                                ],
-                              )
-                            else
-                              _rowsSliver(group, widths),
-                        ],
+                                    if (_isOpen(group))
+                                      _rowsSliver(group, widths),
+                                  ],
+                                )
+                              else
+                                _rowsSliver(group, widths),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         );
+
+        // Arrow keys, Page Up and Down, Home and End. The browser's own
+        // versions of these never reached the table, because nothing in it
+        // held focus to receive them; a click anywhere on it now gives it
+        // focus, and so does arriving on the page.
+        final body = Focus(
+          focusNode: _focus,
+          autofocus: true,
+          onFocusChange: (f) => setState(() => _focused = f),
+          onKeyEvent: (node, event) => _onKey(event, scrolls),
+          child: Listener(
+            onPointerDown: (_) {
+              if (!_focus.hasFocus) _focus.requestFocus();
+            },
+            // The one place in the app whose text cannot be selected by
+            // dragging. A drag here scrolls the table, and a click opens the
+            // row; selecting across twenty-three columns would take both
+            // away for something a spreadsheet does better. A row is copied
+            // whole instead, with Ctrl+C or from the record's own Copy.
+            child: SelectionContainer.disabled(
+              child: ScrollConfiguration(
+                behavior: const DragToPanScrollBehavior(),
+                child: table,
+              ),
+            ),
+          ),
+        );
+        if (!widget.showGroupHeaders) return body;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _GroupBar(
+              groups: widget.groups.length,
+              open: widget.groups.where(_isOpen).length,
+              onAll: _setAll,
+            ),
+            Expanded(child: body),
+          ],
+        );
       },
     );
+  }
+
+  /// The keyboard's way through the table.
+  ///
+  /// Up and Down (or J and K) move a highlighted row, Page Up and Down a
+  /// screenful, Home and End (with or without Ctrl) to either end; Enter or Space opens that row to read, exactly as
+  /// a click does. Left and Right scroll sideways, `/` goes to the search box
+  /// and Escape puts the highlight away. The researcher asked for the whole
+  /// database to be usable from the keyboard; before this the table took no
+  /// keys at all.
+  KeyEventResult _onKey(KeyEvent event, bool scrollsSideways) {
+    if (event is KeyUpEvent || !_vertical.hasClients) {
+      return KeyEventResult.ignored;
+    }
+    _flatten();
+    final key = event.logicalKey;
+
+    if (key == LogicalKeyboardKey.slash && widget.onFind != null) {
+      widget.onFind!();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight) {
+      if (!scrollsSideways) return KeyEventResult.ignored;
+      final h = _horizontal.position;
+      final step = key == LogicalKeyboardKey.arrowRight ? 160.0 : -160.0;
+      _horizontal.jumpTo(
+        (h.pixels + step).clamp(h.minScrollExtent, h.maxScrollExtent),
+      );
+      return KeyEventResult.handled;
+    }
+    if (_flat.isEmpty) return KeyEventResult.ignored;
+
+    final current = _cursorId == null
+        ? -1
+        : _flat.indexWhere((p) => p.entry.entryId == _cursorId);
+
+    if (key == LogicalKeyboardKey.escape) {
+      if (current < 0) return KeyEventResult.ignored;
+      setState(() => _cursorId = null);
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter ||
+        key == LogicalKeyboardKey.space) {
+      if (current < 0) return KeyEventResult.ignored;
+      widget.onRead(_flat[current]);
+      return KeyEventResult.handled;
+    }
+    // Copy, as everywhere else, but of the whole highlighted row, since the
+    // table's text cannot be dragged over. Checked before the movement keys
+    // so that C with Ctrl held is never mistaken for anything else.
+    final keys = HardwareKeyboard.instance;
+    if (key == LogicalKeyboardKey.keyC &&
+        (keys.isControlPressed || keys.isMetaPressed)) {
+      if (current < 0) return KeyEventResult.ignored;
+      Clipboard.setData(
+        ClipboardData(text: recordsAsText([_flat[current]], widget.columns)),
+      );
+      widget.onCopied?.call();
+      return KeyEventResult.handled;
+    }
+
+    // A screenful, less one row so the last one stays in view as the first.
+    final page =
+        ((_vertical.position.viewportDimension - _headingHeight) /
+                widget.rowHeight)
+            .floor() -
+        1;
+    // With no row highlighted yet, the first press lands on the top row in
+    // view rather than moving from somewhere the reader cannot see.
+    final from = current < 0 ? _firstVisibleRow() : current;
+    final last = _flat.length - 1;
+    final int next;
+    // J and K beside the arrows: the next and previous item in Gmail, GitHub
+    // and most mail readers, so a reader who already has the habit finds it
+    // works here too.
+    switch (key) {
+      case LogicalKeyboardKey.arrowDown || LogicalKeyboardKey.keyJ:
+        next = current < 0 ? from : from + 1;
+      case LogicalKeyboardKey.arrowUp || LogicalKeyboardKey.keyK:
+        next = current < 0 ? from : from - 1;
+      case LogicalKeyboardKey.pageDown:
+        next = from + (page < 1 ? 1 : page);
+      case LogicalKeyboardKey.pageUp:
+        next = from - (page < 1 ? 1 : page);
+      case LogicalKeyboardKey.home:
+        next = 0;
+      case LogicalKeyboardKey.end:
+        next = last;
+      default:
+        return KeyEventResult.ignored;
+    }
+    final target = next.clamp(0, last);
+    setState(() => _cursorId = _flat[target].entry.entryId);
+    _reveal(target);
+    return KeyEventResult.handled;
   }
 
   Widget _rowsSliver(EntryGroup group, List<double> widths) =>
@@ -194,7 +460,13 @@ class _EntryTableState extends State<EntryTable> {
             widths: widths,
             actionsWidth: _actionsWidth,
             onOpen: widget.onOpen,
-            onRead: widget.onRead,
+            // A click moves the keyboard's place too, so a reader who clicks
+            // a row, reads it and closes it carries on from there.
+            onRead: (p) {
+              setState(() => _cursorId = p.entry.entryId);
+              widget.onRead(p);
+            },
+            current: _focused && group.rows[i].entry.entryId == _cursorId,
             // Banded within the group, so a heading always restarts the
             // pattern rather than inheriting whatever parity it landed on.
             shaded: i.isOdd,
@@ -205,30 +477,35 @@ class _EntryTableState extends State<EntryTable> {
 
   Widget _header(BuildContext context, List<double> widths) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
+    // A Material rather than a coloured Container: ink paints on the nearest
+    // Material beneath it, and a Container's colour sat on top of that and
+    // hid the headings' focus and hover tints completely.
+    return Material(
       color: scheme.surfaceContainerHigh,
-      height: widget.rowHeight * 0.85,
-      child: Row(
-        children: [
-          for (final (i, column) in widget.columns.indexed)
-            _Seam(
-              column: column,
-              first: i == 0,
-              strong: true,
-              child: SizedBox(
-                width: widths[i],
-                child: _HeaderCell(
-                  column: column,
-                  active: column.id == widget.sortColumnId,
-                  ascending: widget.ascending,
-                  onSort: column.sortKey == null
-                      ? null
-                      : () => widget.onSort(column),
+      child: SizedBox(
+        height: widget.rowHeight * 0.85,
+        child: Row(
+          children: [
+            for (final (i, column) in widget.columns.indexed)
+              _Seam(
+                column: column,
+                first: i == 0,
+                strong: true,
+                child: SizedBox(
+                  width: widths[i],
+                  child: _HeaderCell(
+                    column: column,
+                    active: column.id == widget.sortColumnId,
+                    ascending: widget.ascending,
+                    onSort: column.sortKey == null
+                        ? null
+                        : () => widget.onSort(column),
+                  ),
                 ),
               ),
-            ),
-          const SizedBox(width: _actionsWidth),
-        ],
+            const SizedBox(width: _actionsWidth),
+          ],
+        ),
       ),
     );
   }
@@ -282,6 +559,9 @@ class _HeaderCellState extends State<_HeaderCell> {
               // mistaken for the sort. Full height, because 13px of icon is
               // not something a thumb can find.
               onTap: () => _tip.currentState?.ensureTooltipVisible(),
+              // One Tab stop per heading, not two. From the keyboard the
+              // explanation is in the record dialog beside each field.
+              canRequestFocus: false,
               child: SizedBox(
                 width: 22,
                 height: double.infinity,
@@ -318,9 +598,7 @@ class _HeaderCellState extends State<_HeaderCell> {
     // wedges itself between the heading and the column of numbers it names.
     final label = Row(
       mainAxisSize: MainAxisSize.min,
-      children: column.numeric
-          ? [?info, name, ?arrow]
-          : [name, ?arrow, ?info],
+      children: column.numeric ? [?info, name, ?arrow] : [name, ?arrow, ?info],
     );
 
     final cell = Padding(
@@ -329,8 +607,9 @@ class _HeaderCellState extends State<_HeaderCell> {
         right: !column.numeric && info != null ? 2 : Spacing.sm,
       ),
       child: Align(
-        alignment:
-            column.numeric ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: column.numeric
+            ? Alignment.centerRight
+            : Alignment.centerLeft,
         child: label,
       ),
     );
@@ -353,7 +632,14 @@ class _HeaderCellState extends State<_HeaderCell> {
 
     return widget.onSort == null
         ? withTooltip
-        : InkWell(onTap: widget.onSort, child: withTooltip);
+        : InkWell(
+            onTap: widget.onSort,
+            // Tab reaches the headings, and Enter sorts by the one it is on.
+            // Material's own focus tint was too faint to find on parchment,
+            // so Tab seemed to vanish into the table: this one can be seen.
+            focusColor: scheme.primary.withValues(alpha: 0.22),
+            child: withTooltip,
+          );
   }
 }
 
@@ -361,6 +647,8 @@ class _HeaderCellState extends State<_HeaderCell> {
 class _GroupHeaderDelegate extends SliverPersistentHeaderDelegate {
   _GroupHeaderDelegate({
     required this.group,
+    required this.open,
+    required this.onToggle,
     required this.height,
     required this.unitName,
     required this.scheme,
@@ -370,6 +658,11 @@ class _GroupHeaderDelegate extends SliverPersistentHeaderDelegate {
   });
 
   final EntryGroup group;
+
+  /// Whether the group's rows are showing. A click anywhere on the heading
+  /// opens or closes it.
+  final bool open;
+  final VoidCallback onToggle;
   final double height;
   final String unitName;
   final ColorScheme scheme;
@@ -398,61 +691,82 @@ class _GroupHeaderDelegate extends SliverPersistentHeaderDelegate {
     // Report the sample the median actually came from. A median over 3 of 40
     // entries is a different claim from a median over all 40, and the header
     // is exactly where somebody would otherwise assume the latter.
+    // "per Recorded unit" read as a unit called that; each record is priced
+    // by its own measure, so say so.
+    final per = unitName == MetricItem.recordedUnit.name
+        ? 'recorded measure'
+        : unitName;
     final summary = group.median == null
-        ? 'none priced per $unitName'
-        : 'median ${formatPence(group.median)} pence per $unitName, '
+        ? 'none priced per $per'
+        : 'median ${formatPence(group.median)} pence per $per, '
               'from ${group.pricedCount} of $count';
 
-    return Container(
-      height: height,
+    // Not a Tab stop: a grouping by year is two dozen headings, and Tab would
+    // have to walk all of them to leave the table. The bar above the table
+    // opens and closes the lot from the keyboard.
+    return Material(
       color: scheme.surfaceContainer,
-      child: AnimatedBuilder(
-        animation: horizontal,
-        builder: (context, child) => Transform.translate(
-          offset: Offset(horizontal.hasClients ? horizontal.offset : 0, 0),
-          // Align, not a bare SizedBox: the sliver hands down a tight width of
-          // the whole scrollable row, and a SizedBox cannot be narrower than a
-          // tight constraint — it was silently stretching back to the full
-          // 3,400px and posting the median off the right-hand edge.
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: SizedBox(width: viewportWidth, child: child),
-          ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
-          child: Row(
-            children: [
-              Text(
-                group.label,
-                style:
-                    textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+      child: InkWell(
+        canRequestFocus: false,
+        onTap: onToggle,
+        child: SizedBox(
+          height: height,
+          child: AnimatedBuilder(
+            animation: horizontal,
+            builder: (context, child) => Transform.translate(
+              offset: Offset(horizontal.hasClients ? horizontal.offset : 0, 0),
+              // Align, not a bare SizedBox: the sliver hands down a tight width of
+              // the whole scrollable row, and a SizedBox cannot be narrower than a
+              // tight constraint — it was silently stretching back to the full
+              // 3,400px and posting the median off the right-hand edge.
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(width: viewportWidth, child: child),
               ),
-              const SizedBox(width: Spacing.sm),
-              Text(
-                '$count ${count == 1 ? 'entry' : 'entries'}',
-                style: textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(width: Spacing.md),
-              // Expanded with a right-aligned Text, rather than a Spacer and a
-              // fixed one. A Spacer would either share the free space with a
-              // Flexible sibling (parking the median mid-band) or leave a
-              // fixed sibling unable to shrink — which is how a longer wording
-              // overflowed this row rather than ellipsing.
-              Expanded(
-                child: Text(
-                  summary,
-                  textAlign: TextAlign.right,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.bodySmall?.copyWith(
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
+              child: Row(
+                children: [
+                  Icon(
+                    open ? Icons.expand_more : Icons.chevron_right,
+                    size: 20,
                     color: scheme.onSurfaceVariant,
-                    fontFeatures: const [tabularFigures],
                   ),
-                ),
+                  const SizedBox(width: Spacing.xs),
+                  Text(
+                    group.label,
+                    style: textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: Spacing.sm),
+                  Text(
+                    '$count ${count == 1 ? 'entry' : 'entries'}',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: Spacing.md),
+                  // Expanded with a right-aligned Text, rather than a Spacer and a
+                  // fixed one. A Spacer would either share the free space with a
+                  // Flexible sibling (parking the median mid-band) or leave a
+                  // fixed sibling unable to shrink — which is how a longer wording
+                  // overflowed this row rather than ellipsing.
+                  Expanded(
+                    child: Text(
+                      summary,
+                      textAlign: TextAlign.right,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontFeatures: const [tabularFigures],
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -462,6 +776,7 @@ class _GroupHeaderDelegate extends SliverPersistentHeaderDelegate {
   @override
   bool shouldRebuild(covariant _GroupHeaderDelegate old) =>
       old.group != group ||
+      old.open != open ||
       old.height != height ||
       old.unitName != unitName ||
       old.scheme != scheme ||
@@ -478,6 +793,7 @@ class _EntryRow extends StatelessWidget {
     required this.onOpen,
     required this.onRead,
     required this.shaded,
+    required this.current,
   });
 
   final PricedEntry priced;
@@ -489,6 +805,10 @@ class _EntryRow extends StatelessWidget {
   /// travel without losing its line, and a band carries it further than a rule
   /// between rows does — which is why that rule is gone.
   final bool shaded;
+
+  /// The row the keyboard is on. Shown only while the table has focus, so
+  /// the highlight never lingers to suggest a selection that does nothing.
+  final bool current;
   final ValueChanged<PriceEntry> onOpen;
   final ValueChanged<PricedEntry> onRead;
 
@@ -497,41 +817,60 @@ class _EntryRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final base = Theme.of(context).textTheme.bodyMedium;
 
-    return Material(
-      color: shaded ? scheme.surfaceContainerLow : scheme.surface,
-      child: InkWell(
-        // Reading, not editing. A tap is what somebody does to look closer,
-        // and sending it to the editor meant readers changed records they
-        // only meant to inspect — and scrolling by tapping did it too.
-        onTap: () => onRead(priced),
-        child: Row(
-          children: [
-            for (final (i, column) in columns.indexed)
-              _Seam(
-                column: column,
-                first: i == 0,
-                strong: false,
-                child: SizedBox(
-                  width: widths[i],
-                  child: _Cell(
-                    column: column,
-                    priced: priced,
-                    style: base,
-                    mutedColor: scheme.onSurfaceVariant,
+    // Tinted and outlined both: a tint alone is lost against the banding.
+    return Container(
+      foregroundDecoration: current
+          ? BoxDecoration(border: Border.all(color: scheme.primary, width: 2))
+          : null,
+      child: Material(
+        color: current
+            ? scheme.secondaryContainer
+            : shaded
+            ? scheme.surfaceContainerLow
+            : scheme.surface,
+        child: InkWell(
+          // Reading, not editing. A tap is what somebody does to look closer,
+          // and sending it to the editor meant readers changed records they
+          // only meant to inspect — and scrolling by tapping did it too.
+          onTap: () => onRead(priced),
+          // Out of the Tab order, along with everything else in the row. The
+          // table is one stop and the arrow keys move within it; otherwise Tab
+          // walked through every visible row, its notes and its pencil before
+          // reaching anything else on the page.
+          canRequestFocus: false,
+          child: Row(
+            children: [
+              for (final (i, column) in columns.indexed)
+                _Seam(
+                  column: column,
+                  first: i == 0,
+                  strong: false,
+                  child: SizedBox(
+                    width: widths[i],
+                    child: _Cell(
+                      column: column,
+                      priced: priced,
+                      style: base,
+                      mutedColor: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              SizedBox(
+                width: actionsWidth,
+                // From the keyboard, editing is Enter and then the dialog's
+                // own Edit button: the same two steps a reader takes anyway.
+                child: ExcludeFocus(
+                  child: IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    tooltip: 'Edit this entry',
+                    // The pencil stays a direct route: clicking it says what it
+                    // means, which a tap on the row does not.
+                    onPressed: () => onOpen(priced.entry),
                   ),
                 ),
               ),
-            SizedBox(
-              width: actionsWidth,
-              child: IconButton(
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                tooltip: 'Edit this entry',
-                // The pencil stays a direct route: clicking it says what it
-                // means, which a tap on the row does not.
-                onPressed: () => onOpen(priced.entry),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -602,8 +941,7 @@ class _Cell extends StatelessWidget {
     final estimated = text.startsWith('~');
     // Only a value too long for its column gets one; hovering '1270' to be
     // told '1270' is noise.
-    final clipped =
-        text.length * _perCharacter > column.width - Spacing.sm * 2;
+    final clipped = text.length * _perCharacter > column.width - Spacing.sm * 2;
 
     final child = Padding(
       padding: const EdgeInsets.symmetric(horizontal: Spacing.sm),
@@ -614,8 +952,19 @@ class _Cell extends StatelessWidget {
         // The item column is the one place a cell is not a flat string: the
         // specific carries the weight and its category path recedes. It is
         // what the row is about, and a reader should lock onto it.
+        // The notes mark rides along after it, outside the ellipsis, so a
+        // long path can never push it out of the column.
         child: column.id == 'item'
-            ? ItemLabel(entry: priced.entry, style: style)
+            ? Row(
+                children: [
+                  Flexible(
+                    child: ItemLabel(entry: priced.entry, style: style),
+                  ),
+                  // Out of the Tab order like the rest of the row; from the
+                  // keyboard the notes are read in the dialog Enter opens.
+                  ExcludeFocus(child: RecordNotesMark(entry: priced.entry)),
+                ],
+              )
             : Text(
                 text,
                 maxLines: 1,
@@ -624,8 +973,7 @@ class _Cell extends StatelessWidget {
                 style: style?.copyWith(
                   color: absent || estimated ? mutedColor : null,
                   fontStyle: estimated ? FontStyle.italic : null,
-                  fontFeatures:
-                      column.numeric ? const [tabularFigures] : null,
+                  fontFeatures: column.numeric ? const [tabularFigures] : null,
                 ),
               ),
       ),
@@ -643,5 +991,55 @@ class _Cell extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 360),
             child: child,
           );
+  }
+}
+
+/// Above a grouped table: how many groups are open, and the two buttons that
+/// open or close them all.
+///
+/// The keyboard's way into the groups, since the headings themselves are not
+/// Tab stops, and the quick way back from having opened a dozen of them.
+class _GroupBar extends StatelessWidget {
+  const _GroupBar({
+    required this.groups,
+    required this.open,
+    required this.onAll,
+  });
+
+  final int groups;
+  final int open;
+  final ValueChanged<bool> onAll;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              open == 0
+                  ? '$groups groups. Click one to see its entries.'
+                  : '$open of $groups groups open',
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: open == groups ? null : () => onAll(true),
+            icon: const Icon(Icons.unfold_more, size: 18),
+            label: const Text('Open all'),
+          ),
+          TextButton.icon(
+            onPressed: open == 0 ? null : () => onAll(false),
+            icon: const Icon(Icons.unfold_less, size: 18),
+            label: const Text('Close all'),
+          ),
+        ],
+      ),
+    );
   }
 }

@@ -81,20 +81,20 @@ class _InfoDotState extends State<InfoDot> {
 /// and have it dropped in without anybody touching a layout. Keys are stable
 /// and describe the control; the values are the only part expected to change.
 ///
-/// These are placeholders written from what each control actually does. They
-/// are meant to be replaced wholesale by the researcher's own wording.
+/// Search, Price per, Reset, the figures and Estimates are the researcher's
+/// own wording, from his notes on the tutorial, lightly edited. The rest are
+/// still placeholders written from what each control does, meant to be
+/// replaced by his.
 class Explain {
   const Explain._();
 
   static const pricePer =
-      'What unit the prices are worked out in. "Recorded unit" prices each '
-      'entry by whatever measure the source itself used, which always gives '
-      'an answer. Choose a single unit instead, such as Kilograms, when you '
-      'want to compare one record against another. Entries measured in a kind '
-      'of unit that cannot reach your choice are left out rather than '
-      'converted into a number that would look real and mean nothing. Units '
-      'that cannot price what you are looking at now are crossed out in the '
-      'list.';
+      'This determines what value is given in the column titled "Pence per '
+      'selected unit". It also affects the averages shown below. By default '
+      'it uses the historic measure each record used, but it may be switched '
+      'to "Modern (# or Metric Kg)" or to any historic measure as desired. '
+      'Units that cannot price what you are looking at now are crossed out '
+      'in the list.';
 
   static const filters =
       'Narrow the table by county, category, date and year range. The entry '
@@ -102,42 +102,45 @@ class Explain {
       'filters out of the whole database.';
 
   static const detailLevel =
-      'How much of each record to show. Basics is when, where, what and what '
-      'it cost. More detail adds quantities, the time of year and the page. '
+      'How much of each record to show. Basics is when, where, what and how '
+      'much, and what it cost then and in today\'s money. More detail adds '
+      'the entry number, the time of year and the quantity in metric. '
       'Everything adds the measures behind each figure and how the '
       'calculation reached its answer. The setting follows you across the '
       'whole app.';
 
   static const estimates =
-      'Fills empty prices with a guess drawn from the trend across '
-      'neighbouring years, shown in italics with a tilde so it can never be '
-      'mistaken for a record. Off by default, because everything else here is '
-      'something the source actually says.';
+      'Click here to include estimates for years without historical data. '
+      'Each is a guess drawn from the trend across neighbouring years, shown '
+      'in italics with a tilde so it can never be mistaken for a record. The '
+      'figures above then give two lines, recorded prices alone and with the '
+      'estimates counted, so the difference they make is always in view.';
 
   static const grouping =
       'Gathers the rows under headings, with the median price for each group '
       'shown on the heading itself.';
 
   static const reset =
-      'Puts the filters, the unit, the sorting and the grouping back to how '
-      'the page opens. It does not touch your data.';
+      'Clears your search and filter choices, returning them to their '
+      'default settings. It does not touch your data.';
 
   static const search =
-      'Searches place names, items, categories and the information column at '
-      'once. Type a few letters rather than a whole word.';
+      'Search key term. A general search for words that appear in the '
+      'database: places, items, categories and notes at once. You may refine '
+      'this search further using the filters.';
 
   static const figures =
-      'The middle, the average and the commonest price across every record '
-      'the filters have left, in the unit chosen at Price per. The median is '
-      'the one to trust on a broad selection: a single very dear record drags '
-      'a mean a long way and leaves a median where it was.';
+      'The median, mean and mode prices across every entry on display, with '
+      'the lowest and highest recorded prices for context. Values are in the '
+      'unit chosen at "Price per". The median is the one to trust on a broad '
+      'selection: a single very dear record drags a mean a long way and '
+      'leaves a median where it was.';
 
   static const modernMoney =
-      'The recorded price in today\'s pounds, worked out from the value of a '
-      'penny in that entry\'s own year and then carried forward for '
-      'inflation. It is a guide to scale rather than a valuation: what a '
-      'penny bought in 1270 is a question with more than one defensible '
-      'answer.';
+      'The recorded price in modern British pounds, from the National '
+      'Archives\' figure for a penny in that entry\'s own year. It is a '
+      'guide to scale rather than a valuation: what a penny bought in 1270 '
+      'is a question with more than one defensible answer.';
 
   static const downloadCopy =
       'Saves the whole database, including anything you have changed, as a '
@@ -152,10 +155,39 @@ class Explain {
       'The span of years to include. The records run from 1270 to 1291.';
 
   static const outputUnit =
-      'The unit the answer comes back in. "Recorded unit" uses whatever '
-      'measure the source used for each entry, so it always has an answer; a '
-      'single unit lets you compare entries with each other. Units that '
-      'cannot express the records you have selected are struck through.';
+      'This determines what unit the answer is given in. By default it uses '
+      'the historic measure each record used, so there is always an answer, '
+      'but it may be switched to "Modern (# or Metric Kg)" or to any historic '
+      'measure as desired. Units that cannot price the records you have '
+      'chosen are struck through.';
+
+  // The four below are shared with the table's columns, so that a control
+  // on Advanced Search says what the matching column on Data Display says.
+  // The researcher asked for exactly that: "These should read identical to
+  // what is on the data display tab".
+
+  static const region =
+      'Historic county name. Choose one to narrow the answer to it; counties '
+      'with no records for your other choices are struck through.';
+
+  static const locality =
+      'Settlement name. Type a few letters and pick from the list; leave it '
+      'blank for anywhere in the county.';
+
+  static const timeOfYear =
+      'Month, season, or feast day according to the historic calendar. Most '
+      'records are annual records and do not give a specific date of '
+      'individual transactions.';
+
+  static const item =
+      'Category of item. Note that some entries, like apples, can appear as '
+      'Food / Fruit / Apples or Food / Drink / Apples, and the search may '
+      'also return entries from Appledeford, Isle of Wight. Pick a category, '
+      'then a subcategory and a specific, to refine further.';
+
+  static const showEntries =
+      'Lists the records the answer was worked out from, underneath it, so '
+      'you can see exactly what it rests on.';
 
   static const averageKind =
       'Which average to report. The median is the middle price and is the '

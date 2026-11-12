@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:price_explorer/models/models.dart';
 import 'package:price_explorer/screens/advanced/entry_columns.dart';
@@ -69,7 +70,7 @@ void main() {
   }) =>
       EntryTable(
         groups: groups,
-        columns: columnsFor(level, 'Kilograms', modernYear: 2026),
+        columns: columnsFor(level, 'Kilograms', modernYear: 2017),
         rowHeight: density.rowHeight,
         sortColumnId: 'year',
         ascending: true,
@@ -109,7 +110,7 @@ void main() {
       expect(tester.takeException(), isNull);
       // The columns every level carries.
       expect(find.text('Year'), findsOneWidget);
-      expect(find.text('Pence per Kilograms'), findsOneWidget);
+      expect(find.text('Pence per selected unit'), findsOneWidget);
     });
   }
 
@@ -127,26 +128,32 @@ void main() {
     }
   });
 
-  // Named, not positional. The rule was first written as "everything from
-  // Time of year rightwards", which stopped describing anything the moment the
-  // columns were reordered — Time of year now sits second, beside Year. These
-  // four are the ones whose heading is the whole explanation.
-  const selfEvident = {'Year', 'Place', 'Item', 'Quantity'};
-
-  test('every column explains itself unless its name already does', () {
+  // Every column, without exception. Year, Place, Item and Quantity once went
+  // without, on the reasoning that their headings said it all; the researcher
+  // wrote an explanation for each of them, because "Year" here means a year
+  // that starts at Michaelmas and "Place" stops at the county.
+  test('every column explains itself', () {
     for (final level in DetailLevel.values) {
       for (final column in columnsFor(level, 'Kilograms')) {
-        if (selfEvident.contains(column.label)) {
-          expect(column.explanation, isNull,
-              reason: '"${column.label}" needs no explaining');
-        } else {
-          expect(column.explanation, isNotNull,
-              reason: '"${column.label}" ($level) has no explanation');
-          expect(column.explanation, isNot(contains('*')),
-              reason: '"${column.label}" — tooltips render no markup');
-        }
+        expect(column.explanation, isNotNull,
+            reason: '"${column.label}" ($level) has no explanation');
+        expect(column.explanation, isNot(contains('*')),
+            reason: '"${column.label}" — tooltips render no markup');
       }
     }
+  });
+
+  test('the time of year counts its entries rather than quoting them', () {
+    String? timeOfYear(EntryCounts? counts) => columnsFor(
+          DetailLevel.everything,
+          'Kilograms',
+          counts: counts,
+        ).firstWhere((c) => c.id == 'timeOfYear').explanation;
+
+    expect(timeOfYear((total: 7440, timed: 363, dated: 108)),
+        contains('Only 363 of the 7440 entries'));
+    // No counts, no figure: a stale one is what this replaced.
+    expect(timeOfYear(null), isNot(contains('Only')));
   });
 
   test('every column can be sorted, and by something sensible', () {
@@ -186,8 +193,8 @@ void main() {
     expect(at('Time of year'), lessThan(at('Place')));
     expect(at('Item'), lessThan(at('Quantity')));
     expect(at('Quantity'), lessThan(at('Price as recorded')));
-    expect(at('Price as recorded'), lessThan(at('Pence per Kilograms')));
-    expect(at('Pence per Kilograms'), lessThan(at('Measure 1')));
+    expect(at('Price as recorded'), lessThan(at('Pence per selected unit')));
+    expect(at('Pence per selected unit'), lessThan(at('Measure 1')));
     expect(at('Measure 1'), lessThan(at('Status / info')));
     expect(at('Status / info'), lessThan(at('Source')));
     expect(at('Source'), lessThan(at('Page')));
@@ -202,7 +209,7 @@ void main() {
     ];
     expect(seams, [
       'Price as recorded',
-      'Pence per Kilograms',
+      'Pence per selected unit',
       'Quantity in metric',
       'Status / info',
       'Source',
@@ -248,6 +255,39 @@ void main() {
     expect(find.textContaining('from 1 of 2'), findsOneWidget);
   });
 
+  // Grouped, the table opens as a list of headings with their medians, which
+  // is the comparison the researcher asked for; a heading opens its rows.
+  testWidgets('groups start closed and open from their heading or the bar',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(harness(table(
+      level: DetailLevel.basics,
+      grouped: true,
+      groups: [
+        group('1275', [priced(year: 1275)]),
+        group('1280', [priced(year: 1280)]),
+      ],
+    )));
+    // Only the headings: no row under either.
+    expect(find.text('Cranfield, Bedfordshire'), findsNothing);
+    expect(find.textContaining('2 groups'), findsOneWidget);
+
+    await tester.tap(find.text('1275'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cranfield, Bedfordshire'), findsOneWidget);
+    expect(find.text('1 of 2 groups open'), findsOneWidget);
+
+    await tester.tap(find.text('Open all'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cranfield, Bedfordshire'), findsNWidgets(2));
+
+    await tester.tap(find.text('Close all'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cranfield, Bedfordshire'), findsNothing);
+  });
+
   testWidgets('an unpriced cell explains itself rather than showing a bare dash',
       (tester) async {
     final wrongKind =
@@ -274,6 +314,49 @@ void main() {
         size: const Size(700, 500),
       ));
       expect(tester.takeException(), isNull, reason: level.name);
+    }
+  });
+
+  // The reading aids make every word bigger and wider, and this table is laid
+  // out by hand at fixed widths: the heading budget in CLAUDE.md assumes the
+  // standard size. Each reading typeface at the largest size with the wider
+  // spacing, at both densities, in a window narrower than the table.
+  testWidgets('the reading aids still lay out at every level', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(700, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    for (final font in ReadingFont.values) {
+      for (final density in TableDensity.values) {
+        for (final level in DetailLevel.values) {
+          await tester.pumpWidget(MediaQuery(
+            data: MediaQueryData(
+              size: const Size(700, 500),
+              textScaler: TextScaler.linear(TextSize.largest.scale),
+            ),
+            child: MaterialApp(
+              theme: AppTheme.build(
+                variant: ThemeVariant.parchment,
+                brightness: Brightness.light,
+                density: density,
+                font: font,
+                widerSpacing: true,
+              ),
+              home: Scaffold(
+                body: table(
+                  level: level,
+                  density: density,
+                  grouped: true,
+                  groups: [
+                    group('Food', [priced()])
+                  ],
+                ),
+              ),
+            ),
+          ));
+          expect(tester.takeException(), isNull,
+              reason: '${font.name} ${density.name} ${level.name}');
+        }
+      }
     }
   });
 
@@ -312,11 +395,15 @@ void main() {
   // so it is at every detail level rather than behind Everything.
   test('modern money shows from Basics, and only when there are factors', () {
     for (final level in DetailLevel.values) {
-      final withFactors = columnsFor(level, 'Kilograms', modernYear: 2026);
+      final withFactors = columnsFor(level, 'Kilograms', modernYear: 2017);
       expect(withFactors.map((c) => c.id), contains('modernPrice'),
           reason: '$level should carry the modern price');
+      // Named as a price, beside the recorded one. "In 2026 money" said in
+      // what and not per what, and was read as the per-unit figure.
       expect(withFactors.firstWhere((c) => c.id == 'modernPrice').label,
-          'In 2026 money');
+          'Price in 2017 £');
+      expect(withFactors.map((c) => c.id), contains('modernPerUnit'),
+          reason: '$level should carry the modern price per unit');
 
       // No factors in the database means no column, rather than a column of
       // dashes that reads as a broken app.
@@ -328,7 +415,7 @@ void main() {
 
   test('modern money is sortable and explains itself', () {
     final columns = columnsFor(DetailLevel.everything, 'Kilograms',
-        modernYear: 2026);
+        modernYear: 2017);
     for (final id in ['modernPrice', 'modernPerUnit']) {
       final column = columns.firstWhere((c) => c.id == id);
       expect(column.sortKey, isNotNull, reason: '$id should be sortable');
@@ -338,5 +425,141 @@ void main() {
       // disappears the column starts claiming more than it can support.
       expect(column.explanation, contains('scale'));
     }
+  });
+
+  // What the researcher asked for, level by level, after using it.
+  test('Basics answers what, how much, and what one unit costs today', () {
+    final ids = columnsFor(DetailLevel.basics, 'Kilograms', modernYear: 2017)
+        .map((c) => c.id)
+        .toList();
+    expect(ids, contains('quantity'));
+    expect(ids.last, 'modernPerUnit');
+  });
+
+  test('More detail has the metric quantity but not the page', () {
+    final ids = columnsFor(DetailLevel.detailed, 'Kilograms', modernYear: 2017)
+        .map((c) => c.id);
+    expect(ids, containsAll(['modernPrice', 'modernPerUnit', 'totalMetric']));
+    expect(ids, isNot(contains('page')));
+    expect(columnsFor(DetailLevel.everything, 'Kilograms').map((c) => c.id),
+        contains('page'));
+  });
+
+  // The modern per-unit figure has to be withheld wherever the pence one is.
+  // Read off the calculation instead, it answered per kilogram for a row that
+  // cannot be priced per kilogram, beside a dash in the pence column.
+  test('the modern per-unit figure follows the pence one', () {
+    final column = columnsFor(DetailLevel.basics, 'Kilograms', modernYear: 2017)
+        .firstWhere((c) => c.id == 'modernPerUnit');
+    final withheld = priced(perUnit: null, comparable: false);
+    expect(withheld.calc.modernPerOutputY, isNull,
+        reason: 'precondition: no factor passed, so nothing to leak');
+    expect(column.value(withheld), '—');
+
+    final e = withheld.entry;
+    final shown = PricedEntry(
+        entry: e, calc: e.calculate(), perUnit: 18.755,
+        modernPerUnit: 72.87, comparable: true);
+    expect(column.value(shown), '£72.87');
+  });
+
+  // The researcher asked for the database to be usable from the keyboard
+  // alone. Page Up and Down did nothing, and neither did the arrows: the
+  // table held no focus for them to reach.
+  testWidgets('the keyboard walks the rows and opens one', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final rows = [
+      for (var i = 0; i < 200; i++)
+        PricedEntry(
+          entry: PriceEntry(
+            entryId: 'row$i',
+            legacyEntryNo: i,
+            year: 1270,
+            locality: 'Cranfield',
+          ),
+          calc: PriceEntry(entryId: 'x').calculate(),
+          perUnit: 1,
+          comparable: true,
+        ),
+    ];
+    PricedEntry? read;
+    var found = 0;
+
+    await tester.pumpWidget(harness(EntryTable(
+      groups: [group('', rows)],
+      columns: columnsFor(DetailLevel.everything, 'Kilograms'),
+      rowHeight: TableDensity.comfortable.rowHeight,
+      sortColumnId: 'year',
+      ascending: true,
+      onSort: (_) {},
+      onOpen: (_) {},
+      onRead: (p) => read = p,
+      onFind: () => found++,
+      unitName: 'Kilograms',
+      showGroupHeaders: false,
+    )));
+    await tester.pump();
+
+    ScrollPosition axis(Axis direction) => tester
+        .stateList<ScrollableState>(find.byType(Scrollable))
+        .map((s) => s.position)
+        .firstWhere((p) => p.axis == direction);
+    final down = axis(Axis.vertical);
+    final across = axis(Axis.horizontal);
+
+    Future<void> press(LogicalKeyboardKey key) async {
+      await tester.sendKeyEvent(key);
+      await tester.pump();
+    }
+
+    Future<String?> openCurrent() async {
+      read = null;
+      await press(LogicalKeyboardKey.enter);
+      return read?.entry.entryId;
+    }
+
+    // Nothing is highlighted until a key asks for it, so Enter does nothing.
+    expect(await openCurrent(), isNull);
+
+    // The first press lands on the top row in view rather than moving past it.
+    await press(LogicalKeyboardKey.arrowDown);
+    expect(await openCurrent(), 'row0');
+    await press(LogicalKeyboardKey.arrowDown);
+    await press(LogicalKeyboardKey.arrowDown);
+    await press(LogicalKeyboardKey.arrowUp);
+    expect(await openCurrent(), 'row1');
+
+    // J and K do the same, for readers with the habit from Gmail or GitHub.
+    await press(LogicalKeyboardKey.keyJ);
+    await press(LogicalKeyboardKey.keyJ);
+    await press(LogicalKeyboardKey.keyK);
+    expect(await openCurrent(), 'row2');
+
+    // A page moves the highlight a screenful and scrolls to keep it in view.
+    await press(LogicalKeyboardKey.pageDown);
+    await press(LogicalKeyboardKey.pageDown);
+    expect(down.pixels, greaterThan(0));
+    final paged = await openCurrent();
+    expect(int.parse(paged!.substring(3)), greaterThan(10));
+
+    await press(LogicalKeyboardKey.end);
+    expect(await openCurrent(), 'row199');
+    expect(down.pixels, down.maxScrollExtent);
+
+    await press(LogicalKeyboardKey.home);
+    expect(await openCurrent(), 'row0');
+    expect(down.pixels, 0);
+
+    // Escape puts the highlight away again.
+    await press(LogicalKeyboardKey.escape);
+    expect(await openCurrent(), isNull);
+
+    await press(LogicalKeyboardKey.arrowRight);
+    expect(across.pixels, greaterThan(0));
+
+    await press(LogicalKeyboardKey.slash);
+    expect(found, 1, reason: '/ should ask for the search box');
   });
 }

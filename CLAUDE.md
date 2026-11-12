@@ -48,8 +48,11 @@ Quick lookup alike — not a mode chosen once.
 
 - ~~**`UKP 2026` conversion.**~~ **Done.** The
   researcher's current workbook carries a filled Currency tab, and
-  `currency_factors` now holds a factor for all 250 years from 1270 to 1519,
-  with `currency_rebasing` set to 2017 → 2026 at ×1.3444.
+  `currency_factors` now holds a factor for all 250 years from 1270 to 1519.
+  `currency_rebasing` was 2017 → 2026 at ×1.3444 until migration 3, which
+  sets it to 2017 → 2017 at ×1: the researcher decided to report in 2017
+  pounds rather than keep chasing inflation. The row stays, so the year the
+  columns are labelled with is still read from the database.
 
   **How it is modelled, and why.** The tab gives `UKP 2017` and `UKP 2026` per
   year. Only the 2017 column is stored, as `base_pounds_per_penny`; the 2026
@@ -229,11 +232,12 @@ Two rules the Explorer depends on:
 - **A column that appears at two levels keeps its width.** Wider levels add
   columns and scroll sideways; they never squeeze what was already there.
   `entry_table_test.dart` asserts this.
-- **Every column carries an `explanation` except Year, Place, Item and
-  Quantity**, whose headings are the whole explanation. Asserted by name in
-  `entry_table_test.dart` — the rule was first written positionally ("from
-  Time of year rightwards") and stopped meaning anything the moment the
-  columns were reordered.
+- **Every column carries an `explanation`**, Year, Place, Item and Quantity
+  included. Those four once went without, as self-evident; the researcher
+  wrote text for each, and most of the explanations are now his wording.
+  Asserted in `entry_table_test.dart`. The time-of-year one quotes live
+  counts from `DatabaseRepository.entryCounts`; it used to say "363 of the
+  7,800" long after there were 7,440.
 - **Columns are ordered the way a row is read**, not the way the spreadsheet
   stored it: when and where, what it was, what it cost, what that works out
   to, how the figure was reached, what else the record says, where it came
@@ -244,8 +248,8 @@ Two rules the Explorer depends on:
   is a long way for an eye to travel.
 - **Column names say which figure they are.** There are four prices in a row
   and they used to be called Price, Price (d), d / <unit> and Total sale (d).
-  Now: *Price as recorded*, *Price in pence*, *Pence per <unit>*, *Total sale
-  in pence*; and *Quantity in metric* rather than Total (metric), which read as
+  Now: *Price as recorded*, *Price in pence*, *Pence per selected unit*,
+  *Total sale in pence*; and *Quantity in metric* rather than Total (metric), which read as
   a total sale. Output X and Output Y keep the source's own names on purpose —
   the researcher knows them by those, and the tooltips explain them.
 
@@ -347,7 +351,10 @@ is just `calc.priceInPence`, the recorded shillings and pence. Nothing is
 converted, so `canBePricedPer` always returns true and no entry can come back
 empty.
 
-It is the default in both views. Kilograms was, and observed testing showed
+It is the default in both views, labelled "The measure each record used".
+The modern-units option (`comparableUnit`, "Modern (# or Metric Kg)") was the
+default for a while; the researcher asked for this back. Kilograms was, and
+observed testing showed
 the cost: a reader who changed the unit to something the selection cannot
 express saw an empty column, could not tell whether the app was broken or the
 question unanswerable, and had no way back to where they started.
@@ -537,7 +544,17 @@ Two things that are easy to get wrong and are deliberate here:
   Search builds a parallel list of converted values and takes the same
   statistic over it, which is why its modern figure is not the pence figure
   times a constant.
-- **The column appears from Basics**, beside the recorded price, because the
+- **The headings say per what.** `Price in 2026 £` sits beside `Price as
+  recorded` and is that price; `2026 £ per <unit>` sits beside `Pence per
+  <unit>` and is that figure. As "In 2026 money" and "In 2026 money per …"
+  the researcher read the second as the total sale. It never was: entry 6744,
+  6 Little Pound at 7d, gives £27.20 and £72.87, and a total sale of 42d
+  would be about £163.
+- **The per-unit modern figure comes from `pricedIn`**, carried on
+  `PricedEntry.modernPerUnit`, not from `calc.modernPerOutputY`. The latter
+  answers per whatever unit it was handed, so it showed a figure beside a
+  withheld pence one, and a dash beside a real one on Recorded unit.
+- **Both columns appear from Basics**, beside the recorded price, because the
   researcher asked for a modern equivalent visible "with no effort" and
   changing detail level is effort. `modernYear` is read from the database
   rather than hard-coded, and null hides the columns entirely: a column of
@@ -601,6 +618,14 @@ How the tour points at things:
 - **A step may have no target at all.** The one about opening a record is
   like that: a row lives inside a sliver list and pointing at one of 7,501
   would mean threading a key through every row. A null stop centres the card.
+
+The tour answers to the keys every web tour does: Right or Enter for next,
+Left for back, Escape to leave. Next is given focus outright rather than by
+`autofocus`, which stands aside when the page already has focus; and the
+Explorer does not take focus back for its table while `Tour.isRunning`, or
+the keys went to the table behind the scrim. A step with nothing to point at
+is skipped **in the direction of travel**: always skipping forwards made Back
+bounce off such a step and return to where it started.
 
 The scrim is a `CustomPainter` doing `Path.combine(difference)` between the
 screen and the hole. Tapping it advances, because that is what people try
@@ -694,6 +719,18 @@ detail level each belongs to; a second copy would drift within a month and the
 two would then disagree about what a record says. `entry_table_test.dart`
 asserts that a tap calls `onRead` and never `onOpen`.
 
+### Notes ride on the item, not in a column
+
+Status Info, Food and Information say what kind of "Other" an `Other / Other /
+Other` row is, and once lived only at Everything, twenty columns from the
+item they explain. The researcher's suggestion was that they stay columns in
+the database and stop being columns in the table: `RecordNotesMark`
+(`widgets/record_notes.dart`) puts a small mark after the item wherever any
+of the three holds text, at every level and on the phone cards, opened by
+hover or by tap. The details dialog writes them out in full below Everything,
+where there is room for a sentence. At Everything the columns stay too,
+because that level is the one for sorting and editing them.
+
 ### The specific carries the weight
 
 `widgets/item_label.dart` renders `Food / Grain / `**`Wheat`** with the path
@@ -715,6 +752,64 @@ the vertical one appeared only while the list was actually moving. Observed
 testing: readers did not know the table continued sideways, and did not know
 they could move down it at all. On this table a scrollbar is not decoration,
 it is the only thing saying there is more.
+
+**The vertical bar wraps the sideways scroll, not the list.** Inside it, the
+bar was drawn at the right-hand edge of the full row, which is off screen
+whenever the table is wider than the window: missing in exactly the case it
+was needed. It now sits outside with `notificationPredicate: depth == 1`,
+because the list it tracks is one scroll view down, and the list's automatic
+desktop bar is switched off so a second one does not lurk at the far edge.
+
+### The table is usable from the keyboard alone
+
+The researcher asked for it. A `Focus` round the table takes the keys,
+autofocuses, and takes focus back on any pointer-down. Arrows, Page Up/Down,
+Home and End move a **highlighted row** (`_cursorId`, held by entry id so it
+survives a re-sort); Enter or Space opens it to read, Escape drops the
+highlight, Left/Right scroll sideways, `/` goes to the search box and Enter in
+the search box comes back. A click moves the highlight too, so reading a row
+and closing it carries on from there. The highlight shows only while the
+table has focus.
+
+Three things that make it work and look like tidying:
+
+- **Rows, their pencils and their note marks are out of the Tab order**
+  (`canRequestFocus: false`, `ExcludeFocus`). Otherwise Tab walked every
+  visible row before reaching anything else. The table is one Tab stop; the
+  column headings are the next ones, and Enter on a heading sorts.
+- **The header strip is a `Material`, not a coloured `Container`.** Ink paints
+  on the nearest Material below it, so the Container hid the headings' focus
+  tint completely and Tab appeared to vanish.
+- **Hidden screens are wrapped in `ExcludeFocus`** in `home_shell.dart`. The
+  `IndexedStack` keeps the table mounted behind Advanced Search, and it went
+  on taking arrow keys there out of sight. `AdvancedView.didUpdateWidget`
+  hands focus back to the table on return.
+
+`entry_table_test.dart` drives the whole walk.
+
+### Keys the reader already knows
+
+Keyboard control was asked for "to the industry standard", so the
+keys are borrowed rather than invented, and a habit from elsewhere works here:
+`?` lists every key and `/` goes to search (Gmail, GitHub, YouTube); J and K
+beside the arrows (the same); Alt with 1, 2 or 3 changes screen, as tabs are
+numbered in browsers and editors, and **not Ctrl**, which the browser keeps
+for its own tabs; arrows stop at either end of the rail, as in a list of tabs.
+
+- **The app-wide keys sit ahead of the focus tree**, in
+  `FocusManager.addEarlyKeyEventHandler`. A `Focus` round the screen only
+  hears keys that start inside it, and on first load nothing has focus.
+- **Read off the physical key**, because Option+1 on a Mac types `¡`.
+- **Only from the main screen** (`ModalRoute.isCurrentOf`). Changing screen
+  under an open record leaves a dialog about a screen nobody can see.
+- **`?` and `/` stand aside while typing** (`isTypingText`), or nobody could
+  search for either character.
+
+`widgets/keyboard_help.dart` holds the one list, shown on the Tutorial page
+and in the `?` dialog. Nothing ties it to the code that answers the keys, so
+a key changed there must be changed here too, or the page promises keys that
+do nothing. Below 480px every meaning drops under its keys at once; a `Wrap`
+decided it row by row and the list stopped reading as a list.
 
 ### Sorting belongs to the column
 
@@ -758,6 +853,20 @@ would find nothing are sent to the bottom of the list, struck through, marked
 `(none)` and disabled; the current selection stays enabled so nobody is
 stranded on a value they cannot leave.
 
+**Except the item levels, which nest.** Choosing a category clears the
+subcategory and specific beneath it, and choosing a subcategory clears the
+specific, so each item level is judged only against the levels *above* it.
+Judged against every other filter, picking "wheat" from the item box struck
+out every other subcategory and category as `(none)` (no fish is wheat) and
+the reader could not leave Grain without clearing it first. `facets_test`
+pins it.
+
+**The specific counts at Basics too.** Basics drops region, locality and time
+of year from the answer because it hides those controls. It used to drop the
+specific for the same reason, but the item box is on screen at Basics and
+sets one: "wheat" was answered with every grain under a heading reading
+`Food / Grain`.
+
 Units answer a different question: `canPriceIn` asks whether the surviving
 entries are measured in a *kind* of thing the unit can express. This is the
 case the screen exists for — Labour is paid by the day, so every unit of mass
@@ -779,10 +888,43 @@ free), and a year box grows one only once that end has been moved off the
 range the records cover, where it reads *Back to 1270* rather than blanking a
 field that can never be empty.
 
+**Every cross is out of the Tab order.** `ExcludeFocus` on the text-field
+crosses, and a `trailingIconFocusNode` with `skipTraversal` on each
+`FilterableDropdown`, because `DropdownMenu` wraps its trailing icon in a
+focusable button of its own: each dropdown cost two Tab stops, three with a
+cross inside, and the bare arrow was a button with no name. From the
+keyboard, Backspace on the selected label clears a dropdown, and Ctrl+A then
+Backspace clears a text box.
+
 Two controls deliberately have none: the country, which has one value, and the
 output unit, which is not a filter — every answer is *per* something, so there
 is nothing coherent to clear it to. `_clearAll` leaves the unit alone for the
 same reason.
+
+### Choosing a suggestion from the keyboard
+
+Three faults in `AutocompleteField`, all found by driving Advanced Search with
+the keys alone, and each looks like something to tidy away:
+
+- **`onSubmitted: (_) => onSubmit()`.** Without it, Arrow Down moved through
+  the suggestions and Enter chose nothing: the half-typed text stood, no item
+  was set, and Generate stayed disabled.
+- **`onEditingComplete: () {}`.** A text field drops focus on Enter by
+  default, so after choosing, the next Tab started from the top of the page.
+- **The highlight is drawn and scrolled to from a `Builder`.** The `context`
+  an `itemBuilder` receives belongs to the whole list, so scrolling *it* into
+  view centred the entire list and opened the menu halfway down. The rows are
+  wrapped in `ExcludeFocus` too: focusable, Tab fell into the open list and
+  back, and the keyboard could never leave the box.
+
+And the item box in Advanced Search is **not keyed** on the chosen category.
+The key made the box follow the dropdowns, but it also destroyed the box
+whenever a pick in it changed the category, and focus fell back to the
+navigation rail. The field now follows a changed `initialValue` in
+`didUpdateWidget`, as `FilterableDropdown` already did.
+
+The navigation rail is a `FocusTraversalGroup`. Tab otherwise reads the page
+in rows, and on Advanced Search took Tutorial after the three detail chips.
 
 ### A `DropdownMenu` you can type into
 
@@ -833,12 +975,50 @@ it caps at 50 options and only builds them while the overlay is open. The
 editor already used it for exactly this reason. Anything past a few dozen
 options should be typed, not scrolled: nobody finds 'Wyllindone' in a list.
 
-A mouse can drag the view around: `DragToPanScrollBehavior` adds
-`PointerDeviceKind.mouse` to `dragDevices` and is set on `MaterialApp`. Flutter
+A mouse can drag the table around: `DragToPanScrollBehavior` adds
+`PointerDeviceKind.mouse` to `dragDevices`, **on the table only**. It was set
+on `MaterialApp` once, and every other scrolling page then took a mouse drag
+as a scroll before text selection could see it. Flutter
 leaves it out by default because click-drag usually means selecting text; here
 the table is ~3,000px wide and the alternatives were a shift-wheel and a
 three-pixel scrollbar. Clicks and text selection are unaffected — a drag only
 wins the gesture arena once nothing nearer the pointer has claimed it.
+
+### Reading aids
+
+The researcher asked for them, naming a dyslexia typeface. Three settings in
+Display, under Reading, plus one change that is not a setting:
+
+- **Typeface.** Inter, Atkinson Hyperlegible (Braille Institute, for low
+  vision: I, l and 1 and O and 0 cannot be mistaken, which is what a column of
+  place names and figures needs) or OpenDyslexic. Both extra faces are SIL
+  OFL, shipped under `app/fonts/` with their licences in `fonts/licences/`
+  and registered in `main.dart`. Bundled rather than fetched, like Inter,
+  because the app runs offline. The evidence for OpenDyslexic is mixed, so
+  the wording says some readers find it helps, not that it does.
+- **Text size**, ×1.15 or ×1.3 on top of whatever the system asks for, via
+  `MaterialApp.builder`. Not browser zoom, which shrinks the table's view of
+  rows and columns at once.
+- **Wider spacing**, added style by style in `AppTheme._spaced`. Not
+  `TextTheme.apply(letterSpacingDelta: ...)`, which asserts on the styles
+  Material leaves unset. The letter spacing is eased below the W3C's eighth
+  of a size because OpenDyslexic, already wide, fell apart into single
+  letters at the full amount.
+- **The focus ring**, `widgets/focus_ring.dart`, always on and keyboard only.
+  Material's focus tint was a tenth-strength wash, invisible on parchment, so
+  Tab worked and nobody could see where it was. One ring painted over the
+  whole app rather than every button restyled, which would miss whichever
+  kind came next. It reads the focused box **at paint time**, so it is never
+  a frame behind a scroll; it follows for 400 ms after a change, because
+  focus often lands in a dialog that is still growing; and it skips anything
+  over 40% of the window, which is the table, whose current row is its own
+  highlight.
+
+The typeface and spacing are part of `AppTheme`'s cache key and of the
+`Selector` in `main.dart`. A family named outright anywhere in `lib/` would
+stop the reading typeface at that widget; the rail's label styles needed one
+for exactly that reason. `entry_table_test.dart` lays the table out at the
+largest size with wide spacing in every typeface, density and level.
 
 ### Judge speed in release, not `flutter run`
 
@@ -861,6 +1041,55 @@ rebuilds on a theme change, because `active` gates the *notifier* subscription
 and not the inherited `Theme` dependency. Measured at ~15% of a palette
 change, and stopping it means unmounting the hidden view and moving its filter
 state somewhere that survives. Not worth it at these numbers.
+
+### Groups open and close, and start closed
+
+Grouped, the table (and the phone cards) shows only the headings, each with
+its median, until one is clicked. The researcher's request: grouping by year
+should let a reader "look at the median price for 1270, then deselect to see
+only 1280", and with every row on screen the headings were hundreds of rows
+apart. Open groups are held by label in `_EntryTableState._open`, so they
+survive a re-sort, a unit change or an edit. Headings are not Tab stops (two
+dozen of them would trap Tab); the Open all / Close all bar above the table
+is the keyboard route. The keyboard cursor walks only rows that are showing.
+
+### Settlement filter, and (?) on Advanced Search
+
+Filters has a Settlement box beside County: typed rather than picked
+(hundreds of names), suggesting only the chosen county's, and filtering only
+on an exact name. Changing the county lets go of it. Advanced Search carries a
+(?) on every control, and where a control matches a table column the two read
+the same `Explain` constant, which is what the researcher asked for.
+
+### Every word can be copied
+
+The researcher's sharpest complaint: everything had to be retyped.
+`widgets/app_selection.dart` holds the answer, and each part of it was found
+by trying the simpler version first.
+
+- **A selection per screen and per dialog, never one round the app.** One in
+  `MaterialApp.builder` held the keyboard from outside every dialog once
+  something was selected: Escape stopped closing records. One round the
+  `IndexedStack` was answered by whichever hidden screen came last.
+  `home_shell.dart` wraps each view separately; the stack hit-tests only the
+  visible one. **Do not reach for global keys to move the views between
+  wrappers**: that was tried, and reparenting text mid-selection makes
+  Flutter's own scroll-view selection throw at phone width.
+- **`CopyLayout` goes inside each scroll view, round its content.** Flutter
+  joins selected pieces with nothing between them (`Year1270Place...`), and a
+  scroll view joins its own pieces before anything outside sees them. Inside,
+  a piece lower down starts a new line and one beside it gets a tab, so a
+  label and its value paste into a spreadsheet as two cells.
+- **The table body is out of it** (`SelectionContainer.disabled`), because a
+  drag there scrolls and a click opens the row. Ctrl+C on the highlighted
+  row, or Copy in the record dialog, copies the row as headings over values,
+  tab-separated, with the dash left as an empty cell (`recordsAsText`).
+- **Dropdowns are out of it too**: `DropdownMenu` lays out every option
+  unseen, and a drag across the toolbar copied all of them.
+- **The tour takes focus back** whenever it leaves its scope, because a click
+  inside a selectable page claims focus after the tour has given it to Next.
+
+`copy_test.dart` pins both the row format and the line-and-tab joining.
 
 Storage model, in the user's terms: OPFS is a **safety net**, downloading a
 timestamped `.sqlite` is the only **filing system**. Nothing is overwritten in
@@ -912,7 +1141,7 @@ density in a window narrower than the widest column set. The table lays itself
 out by hand, and that kind of layout fails by throwing during a render pass at
 a size nobody happened to try.
 
-73 tests, all passing.
+124 tests, all passing.
 
 ## Repo hygiene notes
 

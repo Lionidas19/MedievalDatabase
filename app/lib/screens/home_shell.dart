@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../services/app_version.dart';
@@ -6,6 +7,8 @@ import '../services/install_prompt.dart';
 import '../state/app_controller.dart';
 import '../state/view_preferences.dart';
 import '../theme.dart';
+import '../widgets/app_selection.dart';
+import '../widgets/keyboard_help.dart';
 import 'display_settings.dart';
 import 'guide_screen.dart';
 import 'tour/tour.dart';
@@ -24,6 +27,63 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   bool _announcedRestore = false;
 
+  // Ahead of the focus tree rather than in it, so these keys work whatever
+  // has focus, and when nothing has: a Focus wrapped round the screen only
+  // hears keys that start somewhere inside it, and on first load nothing is
+  // focused at all.
+  @override
+  void initState() {
+    super.initState();
+    FocusManager.instance.addEarlyKeyEventHandler(_onAppKey);
+  }
+
+  @override
+  void dispose() {
+    FocusManager.instance.removeEarlyKeyEventHandler(_onAppKey);
+    super.dispose();
+  }
+
+  /// The keys that belong to the whole app rather than one screen: Alt and a
+  /// number to change screen, and `?` for the list of keys.
+  ///
+  /// Read off the physical key, not the character, because on a Mac Option+1
+  /// types `¡` and the character would never be a 1.
+  ///
+  /// Only from the main screen. With a record, a menu or the key list open
+  /// over it, changing screen underneath would leave the reader looking at a
+  /// dialog that no longer belongs to what is behind it; and the tour moves
+  /// between screens itself.
+  KeyEventResult _onAppKey(KeyEvent event) {
+    if (event is! KeyDownEvent || !mounted || Tour.isRunning) {
+      return KeyEventResult.ignored;
+    }
+    if (!(ModalRoute.isCurrentOf(context) ?? true)) {
+      return KeyEventResult.ignored;
+    }
+    final app = context.read<AppController>();
+    if (!app.hasData) return KeyEventResult.ignored;
+
+    final keys = HardwareKeyboard.instance;
+    if (keys.isAltPressed && !keys.isControlPressed && !keys.isMetaPressed) {
+      final screen = switch (event.physicalKey) {
+        PhysicalKeyboardKey.digit1 || PhysicalKeyboardKey.numpad1 => 0,
+        PhysicalKeyboardKey.digit2 || PhysicalKeyboardKey.numpad2 => 1,
+        PhysicalKeyboardKey.digit3 || PhysicalKeyboardKey.numpad3 => 2,
+        _ => null,
+      };
+      if (screen != null) {
+        app.setMode(_order[screen]);
+        return KeyEventResult.handled;
+      }
+    }
+    // Typed as a question mark into a search box, it is a question mark.
+    if (event.character == '?' && !isTypingText()) {
+      showKeyboardHelp(context);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppController>();
@@ -38,8 +98,9 @@ class _HomeShellState extends State<HomeShell> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text(
-                'Picked up your saved copy from this browser, including any '
-                'edits from last time.'),
+              'Picked up your saved copy from this browser, including any '
+              'edits from last time.',
+            ),
             duration: const Duration(seconds: 6),
             action: SnackBarAction(
               label: 'Start fresh',
@@ -96,11 +157,13 @@ Future<void> _resetToDefault(BuildContext context, AppController app) async {
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel')),
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
         FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Discard and reload')),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Discard and reload'),
+        ),
       ],
     ),
   );
@@ -124,8 +187,10 @@ class _ErrorBanner extends StatelessWidget {
             Icon(Icons.error_outline, size: 18, color: scheme.onErrorContainer),
             const SizedBox(width: 10),
             Expanded(
-              child: SelectableText(message,
-                  style: TextStyle(color: scheme.onErrorContainer)),
+              child: SelectableText(
+                message,
+                style: TextStyle(color: scheme.onErrorContainer),
+              ),
             ),
           ],
         ),
@@ -154,13 +219,36 @@ class _ModeBody extends StatelessWidget {
         ViewMode.simple => 1,
         ViewMode.guide => 2,
       },
+      // A hidden view must not hold the keyboard either. The table takes the
+      // arrow keys, and left focused behind Advanced Search it went on
+      // scrolling, out of sight, under every keypress meant for the screen
+      // in front.
+      //
+      // Each view has a selection of its own rather than one round the
+      // stack. The hidden views are still laid out, in the very place of the
+      // one on screen, and with one selection over all three a drag was
+      // answered by whichever came last: on Data Display nothing could be
+      // selected at all, because the Tutorial underneath was taking it. The
+      // stack hands a pointer only to the view on show, so a selection per
+      // view can only ever be the visible one's.
       children: [
-        AdvancedView(active: advanced),
-        SimpleView(active: mode == ViewMode.simple),
-        GuideScreen(active: mode == ViewMode.guide),
+        _view(advanced, AdvancedView(active: advanced)),
+        _view(
+          mode == ViewMode.simple,
+          SimpleView(active: mode == ViewMode.simple),
+        ),
+        _view(
+          mode == ViewMode.guide,
+          GuideScreen(active: mode == ViewMode.guide),
+        ),
       ],
     );
   }
+
+  static Widget _view(bool shown, Widget view) => ExcludeFocus(
+    excluding: !shown,
+    child: AppSelection(child: view),
+  );
 }
 
 /// The order both navigations show, and the only place it is stated.
@@ -183,50 +271,86 @@ class _SideNav extends StatelessWidget {
     // under the destinations, which would read as a third one — so the version
     // goes below the rail in a Column. The Column carries the rail's own
     // colour so no seam shows where one ends and the other begins.
+    // A traversal group of its own, so Tab takes the three destinations in
+    // turn. Ungrouped, Tab reads the page in rows, and Tutorial came after
+    // whatever sat beside it on the screen: on Advanced Search, after the
+    // three detail chips.
+    //
+    // Up and Down move between the three as well, which is how a list of
+    // tabs is expected to behave from the keyboard, and stop at either end
+    // rather than carrying on into the app bar. Flutter's own directional
+    // focus did carry on: Up from Data Display landed on the detail button.
     return TourTarget(
       stop: TourStop.views,
-      child: ColoredBox(
-      color: scheme.surfaceContainerLow,
-      child: Column(
-        children: [
-          Expanded(
-            child: NavigationRail(
-              selectedIndex: _order.indexOf(app.mode),
-              labelType: NavigationRailLabelType.all,
-              onDestinationSelected: (i) => app.setMode(_order[i]),
-              destinations: [
-                // The unselected icon sits in an outlined pill so it looks
-                // like something to press. Material gives the selected one a
-                // filled indicator and the other nothing at all, which read
-                // as a heading — and nobody pressed it.
-                NavigationRailDestination(
-                  icon: _RailIcon(icon: Icons.table_chart_outlined),
-                  selectedIcon: const Icon(Icons.table_chart),
-                  label: const Text('Data Display'),
+      child: Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onKeyEvent: (rail, event) {
+          if (event is KeyUpEvent) return KeyEventResult.ignored;
+          final step = switch (event.logicalKey) {
+            LogicalKeyboardKey.arrowUp => -1,
+            LogicalKeyboardKey.arrowDown => 1,
+            _ => 0,
+          };
+          if (step == 0) return KeyEventResult.ignored;
+          final stops = rail.traversalDescendants.toList()
+            ..sort((a, b) => a.rect.top.compareTo(b.rect.top));
+          final at = stops.indexOf(FocusManager.instance.primaryFocus!);
+          if (at < 0) return KeyEventResult.ignored;
+          stops[(at + step).clamp(0, stops.length - 1)].requestFocus();
+          return KeyEventResult.handled;
+        },
+        child: FocusTraversalGroup(
+          child: ColoredBox(
+            color: scheme.surfaceContainerLow,
+            child: Column(
+              children: [
+                Expanded(
+                  child: NavigationRail(
+                    selectedIndex: _order.indexOf(app.mode),
+                    labelType: NavigationRailLabelType.all,
+                    onDestinationSelected: (i) => app.setMode(_order[i]),
+                    destinations: [
+                      // The unselected icon sits in an outlined pill so it looks
+                      // like something to press. Material gives the selected one a
+                      // filled indicator and the other nothing at all, which read
+                      // as a heading — and nobody pressed it.
+                      NavigationRailDestination(
+                        icon: _RailIcon(icon: Icons.table_chart_outlined),
+                        selectedIcon: const Icon(Icons.table_chart),
+                        label: const Text('Data Display'),
+                      ),
+                      NavigationRailDestination(
+                        // Marked for the tour, which stops to point an arrow
+                        // at it before taking the reader over there.
+                        icon: TourTarget(
+                          stop: TourStop.otherScreen,
+                          child: _RailIcon(icon: Icons.eco_outlined),
+                        ),
+                        selectedIcon: const Icon(Icons.eco),
+                        label: const Text('Advanced Search'),
+                      ),
+                      // The researcher asked for this third button by name, and for
+                      // the reason it is here: nobody in his testing found the
+                      // second screen, let alone worked out what it was for.
+                      NavigationRailDestination(
+                        icon: _RailIcon(icon: Icons.help_outline),
+                        selectedIcon: const Icon(Icons.help),
+                        // His word, not ours. The feedback asks for "a third
+                        // button here for 'Tutorial'", and a reader looking for the
+                        // thing he told them about should find the name he used.
+                        label: const Text('Tutorial'),
+                      ),
+                    ],
+                  ),
                 ),
-                NavigationRailDestination(
-                  icon: _RailIcon(icon: Icons.eco_outlined),
-                  selectedIcon: const Icon(Icons.eco),
-                  label: const Text('Advanced Search'),
-                ),
-                // The researcher asked for this third button by name, and for
-                // the reason it is here: nobody in his testing found the
-                // second screen, let alone worked out what it was for.
-                NavigationRailDestination(
-                  icon: _RailIcon(icon: Icons.help_outline),
-                  selectedIcon: const Icon(Icons.help),
-                  // His word, not ours. The feedback asks for "a third
-                  // button here for 'Tutorial'", and a reader looking for the
-                  // thing he told them about should find the name he used.
-                  label: const Text('Tutorial'),
-                ),
+                const _VersionLabel(),
               ],
             ),
           ),
-          const _VersionLabel(),
-        ],
+        ),
       ),
-    ));
+    );
   }
 }
 
@@ -301,7 +425,10 @@ class _BottomNav extends StatelessWidget {
           label: 'Data Display',
         ),
         NavigationDestination(
-          icon: Icon(Icons.eco_outlined),
+          icon: TourTarget(
+            stop: TourStop.otherScreen,
+            child: Icon(Icons.eco_outlined),
+          ),
           selectedIcon: Icon(Icons.eco),
           label: 'Advanced Search',
         ),
@@ -333,39 +460,39 @@ class _SaveIndicator extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final (icon, text, colour, tooltip) = switch (app.saveState) {
       LocalSaveState.unsupported => (
-          Icons.cloud_off_outlined,
-          'Not saved',
-          scheme.onSurfaceVariant,
-          'This browser gives the app no private storage, so edits last only '
-              'until you close the tab. Download a file to keep your work.',
-        ),
+        Icons.cloud_off_outlined,
+        'Not saved',
+        scheme.onSurfaceVariant,
+        'This browser gives the app no private storage, so edits last only '
+            'until you close the tab. Download a file to keep your work.',
+      ),
       LocalSaveState.saving => (
-          Icons.sync,
-          'Saving…',
-          scheme.onSurfaceVariant,
-          'Writing the working copy to this browser.',
-        ),
+        Icons.sync,
+        'Saving…',
+        scheme.onSurfaceVariant,
+        'Writing the working copy to this browser.',
+      ),
       LocalSaveState.saved => (
-          Icons.check_circle_outline,
-          app.lastSavedAt == null ? 'Saved' : 'Saved ${_time(app.lastSavedAt!)}',
-          scheme.primary,
-          'Saved in this browser only — invisible to your file manager and '
-              'gone if you clear site data. Download a file for a copy you can '
-              'keep or send.',
-        ),
+        Icons.check_circle_outline,
+        app.lastSavedAt == null ? 'Saved' : 'Saved ${_time(app.lastSavedAt!)}',
+        scheme.primary,
+        'Saved in this browser only — invisible to your file manager and '
+            'gone if you clear site data. Download a file for a copy you can '
+            'keep or send.',
+      ),
       LocalSaveState.failed => (
-          Icons.error_outline,
-          'Save failed',
-          scheme.error,
-          'Could not write to this browser: ${app.saveError ?? 'unknown error'}. '
-              'Download a file so your work is not lost.',
-        ),
+        Icons.error_outline,
+        'Save failed',
+        scheme.error,
+        'Could not write to this browser: ${app.saveError ?? 'unknown error'}. '
+            'Download a file so your work is not lost.',
+      ),
       LocalSaveState.idle => (
-          Icons.cloud_done_outlined,
-          'No changes',
-          scheme.onSurfaceVariant,
-          'Nothing edited yet in this session.',
-        ),
+        Icons.cloud_done_outlined,
+        'No changes',
+        scheme.onSurfaceVariant,
+        'Nothing edited yet in this session.',
+      ),
     };
 
     return Tooltip(
@@ -378,11 +505,12 @@ class _SaveIndicator extends StatelessWidget {
             Icon(icon, size: 16, color: colour),
             if (!compact) ...[
               const SizedBox(width: 6),
-              Text(text,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodySmall
-                      ?.copyWith(color: colour)),
+              Text(
+                text,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: colour),
+              ),
             ],
           ],
         ),
@@ -417,7 +545,7 @@ class _DisplayButton extends StatelessWidget {
       );
     }
     return Tooltip(
-      message: 'Detail, theme and row height',
+      message: 'Detail, theme, reading and row height',
       child: TextButton.icon(
         onPressed: () => showDisplaySettings(context),
         // Not Icons.tune: the Explorer's filter button already wears it,
@@ -490,8 +618,11 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
             padding: const EdgeInsets.only(right: 4),
             child: Row(
               children: [
-                Icon(Icons.description_outlined,
-                    size: 16, color: scheme.onSurfaceVariant),
+                Icon(
+                  Icons.description_outlined,
+                  size: 16,
+                  color: scheme.onSurfaceVariant,
+                ),
                 const SizedBox(width: 6),
                 // Capped and ellipsised: these names are long, and every file
                 // the app hands back carries a timestamp on the end of it.
@@ -502,8 +633,8 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                     overflow: TextOverflow.ellipsis,
                     softWrap: false,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ],
@@ -525,15 +656,17 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
         if (!compact)
           _labelled
               ? OutlinedButton.icon(
-                  onPressed:
-                      app.isLoading ? null : () => _openFile(context, app),
+                  onPressed: app.isLoading
+                      ? null
+                      : () => _openFile(context, app),
                   icon: const Icon(Icons.upload_file_outlined, size: 18),
                   label: const Text('Open file'),
                 )
               : IconButton(
                   tooltip: 'Open file',
-                  onPressed:
-                      app.isLoading ? null : () => _openFile(context, app),
+                  onPressed: app.isLoading
+                      ? null
+                      : () => _openFile(context, app),
                   icon: const Icon(Icons.upload_file_outlined),
                 ),
         const SizedBox(width: 8),
@@ -544,17 +677,19 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
           stop: TourStop.download,
           child: _labelled
               ? FilledButton.icon(
-                  onPressed:
-                      app.isLoading ? null : () => _download(context, app),
+                  onPressed: app.isLoading
+                      ? null
+                      : () => _download(context, app),
                   icon: const Icon(Icons.download_outlined, size: 18),
                   label: Text(
-                      app.isDirty ? 'Download changes' : 'Download a copy'),
+                    app.isDirty ? 'Download changes' : 'Download a copy',
+                  ),
                 )
               : IconButton.filled(
-                  tooltip:
-                      app.isDirty ? 'Download changes' : 'Download a copy',
-                  onPressed:
-                      app.isLoading ? null : () => _download(context, app),
+                  tooltip: app.isDirty ? 'Download changes' : 'Download a copy',
+                  onPressed: app.isLoading
+                      ? null
+                      : () => _download(context, app),
                   icon: const Icon(Icons.download_outlined),
                 ),
         ),
@@ -652,11 +787,13 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Replace and open')),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Replace and open'),
+            ),
           ],
         ),
       );
@@ -676,9 +813,9 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   Future<void> _download(BuildContext context, AppController app) async {
     final name = app.downloadCurrentFile();
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Downloaded as $name')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Downloaded as $name')));
   }
 }
 

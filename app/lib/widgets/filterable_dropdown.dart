@@ -59,6 +59,16 @@ class _FilterableDropdownState<T> extends State<FilterableDropdown<T>> {
   /// never filters. That cost an hour; do not put it back.
   bool _hasFocus = false;
 
+  /// For the arrow or cross at the end of the field, and *only* that: this is
+  /// not the FocusNode warned against above, which is the text field's.
+  ///
+  /// `DropdownMenu` wraps its trailing icon in a focusable button of its own,
+  /// so every dropdown cost Tab two stops, and three where our cross sat
+  /// inside it. The bare arrow had no name, so a screen reader announced it
+  /// as "button". Skipped in traversal it still answers a click; from the
+  /// keyboard, Down opens the menu and Backspace empties the selected label.
+  final _trailingFocus = FocusNode(skipTraversal: true);
+
   String get _selectedLabel {
     for (final e in widget.entries) {
       if (e.value == widget.value) return e.label;
@@ -128,11 +138,19 @@ class _FilterableDropdownState<T> extends State<FilterableDropdown<T>> {
   @override
   void dispose() {
     _controller.dispose();
+    _trailingFocus.dispose();
     super.dispose();
   }
 
+  // Out of any surrounding selection. DropdownMenu lays out every option
+  // unseen, to size itself to the widest, and a drag across the toolbar
+  // copied all of them: "No grouping By year By county By category". The
+  // chosen value is in a text field, which selects on its own terms anyway.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) =>
+      SelectionContainer.disabled(child: _dropdown(context));
+
+  Widget _dropdown(BuildContext context) {
     return Focus(
       canRequestFocus: false,
       skipTraversal: true,
@@ -165,14 +183,17 @@ class _FilterableDropdownState<T> extends State<FilterableDropdown<T>> {
           // The list does carry an "Any ..." row, but the menu opens scrolled
           // to whatever is selected, so that row is usually above the fold and
           // no help at all. Un-choosing needs to be visible without hunting.
+          trailingIconFocusNode: _trailingFocus,
           trailingIcon: widget.value != null && widget.canClear
-              ? IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: 'Clear',
-                  onPressed: () {
-                    _controller.clear();
-                    widget.onSelected(null as T);
-                  },
+              ? ExcludeFocus(
+                  child: IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Clear',
+                    onPressed: () {
+                      _controller.clear();
+                      widget.onSelected(null as T);
+                    },
+                  ),
                 )
               : null,
           dropdownMenuEntries: widget.entries,

@@ -14,6 +14,7 @@ import '../tour/tour.dart';
 import '../../widgets/price_trend_chart.dart';
 import 'facets.dart';
 import '../advanced/advanced_view.dart' show openEntryEditor;
+import '../../widgets/app_selection.dart';
 
 /// How much of the question the reader wants to fill in is [DetailLevel],
 /// shared with the Explorer and the entry editor.
@@ -247,16 +248,15 @@ class _SimpleViewState extends State<SimpleView> {
     required T? selected,
     DropdownMenuEntry<T>? anyOption,
     bool Function(T)? priceable,
-  }) =>
-      facetEntries<T>(
-        context,
-        options: options,
-        available: available,
-        selected: selected,
-        anyOption: anyOption,
-        priceable: priceable,
-        unitName: _outputUnit?.name,
-      );
+  }) => facetEntries<T>(
+    context,
+    options: options,
+    available: available,
+    selected: selected,
+    anyOption: anyOption,
+    priceable: priceable,
+    unitName: _outputUnit?.name,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -280,8 +280,8 @@ class _SimpleViewState extends State<SimpleView> {
     _yearRange ??= RangeValues(minYear.toDouble(), maxYear.toDouble());
 
     final outputUnits = [
-      MetricItem.comparableUnit,
       MetricItem.recordedUnit,
+      MetricItem.comparableUnit,
       ...repo.outputUnitChoices,
     ];
     _outputUnit ??= _defaultOutputUnit(outputUnits);
@@ -310,473 +310,567 @@ class _SimpleViewState extends State<SimpleView> {
     return Center(
       child: SingleChildScrollView(
         padding: EdgeInsets.all(short ? Spacing.md : Spacing.xl),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 820),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Card(
-                child: Padding(
-                  padding: EdgeInsets.all(short ? Spacing.lg : Spacing.xl),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.eco,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            'Advanced Search',
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                        ],
-                      ),
-                      // The level's description is the first thing to go when
-                      // the screen is short: the chips below say the same in
-                      // one word each, and the room buys the Generate button a
-                      // place above the fold.
-                      if (!short) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          level.description,
-                          style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-                      // Its own row rather than trailing the title: sharing a
-                      // Row with a Spacer left the chips a hair too little
-                      // width and clipped their last letter.
-                      _ChoiceRow<DetailLevel>(
-                        values: DetailLevel.values,
-                        selected: level,
-                        labelOf: (d) => d.label,
-                        onSelected: (d) => prefs.detailLevel = d,
-                      ),
-                      SizedBox(height: short ? Spacing.md : 20),
-
-                      TourTarget(
-                        stop: TourStop.searchForm,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+        child: CopyLayout(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 820),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(short ? Spacing.lg : Spacing.xl),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                           children: [
-                      // --- where ---
-                      _sentenceRow([
-                        const Text('In'),
-                        if (countries.length == 1)
-                          _fixedValue(context, countries.first.label)
-                        else
-                          _dropdown<String?>(
-                            width: _fieldWidth,
-                            value: null,
-                            hint: 'any country',
-                            entries: [
-                              const DropdownMenuEntry(
-                                value: null,
-                                label: 'Any country',
-                              ),
-                              ...countries.map(
-                                (c) => DropdownMenuEntry(
-                                  value: c.label,
-                                  label: c.label,
-                                ),
-                              ),
-                            ],
-                            onSelected: (_) {},
-                          ),
-                        if (!isSimple) ...[
-                          _dropdown<LookupItem?>(
-                            width: _fieldWidth,
-                            value: _county,
-                            hint: 'any region',
-                            entries: _facetEntries<LookupItem?>(
-                              anyOption: const DropdownMenuEntry(
-                                value: null,
-                                label: 'Any region',
-                              ),
-                              options: [for (final c in counties) (c, c.label)],
-                              available: (c) =>
-                                  facets.counties.containsKey(c?.label),
-                              priceable: (c) =>
-                                  (facets.counties[c?.label]?.priced ?? 0) > 0,
-                              selected: _county,
+                            Icon(
+                              Icons.eco,
+                              color: Theme.of(context).colorScheme.primary,
                             ),
-                            onSelected: (v) => setState(() {
-                              _county = v;
-                              _locality = null;
-                              _localityText = '';
-                            }),
-                          ),
-                          // Typed, not picked from a list.
-                          //
-                          // A DropdownMenu builds every one of its entries up
-                          // front, and there are 789 localities: opening this
-                          // screen locked the app for five seconds. It was
-                          // also unusable — nobody scrolls to 'Wyllindone'.
-                          // Keyed to the county so choosing one clears
-                          // whatever locality was typed for the last.
-                          SizedBox(
-                            width: _fieldWidth,
-                            child: AutocompleteField(
-                              key: ValueKey('locality-${_county?.id}'),
-                              label: 'Locality',
-                              initialValue: _locality ?? '',
-                              suggestions: localityNames,
-                              helperText:
-                                  _locality == null &&
-                                      _localityText.trim().isNotEmpty
-                                  ? 'No locality of that name'
-                                  : 'Blank means any',
-                              onChanged: (text) => setState(() {
-                                _localityText = text;
-                                // Only an exact name filters. Half-typed text
-                                // would silently match nothing and look like
-                                // an empty database.
-                                _locality = localityNames.contains(text)
-                                    ? text
-                                    : null;
-                              }),
+                            const SizedBox(width: 10),
+                            Text(
+                              'Advanced Search',
+                              style: Theme.of(context).textTheme.titleLarge,
                             ),
-                          ),
-                        ],
-                      ]),
-                      SizedBox(height: gap),
-
-                      // --- when ---
-                      _sentenceRow([
-                        const Text('Between the years'),
-                        _yearField(isStart: true, min: minYear, max: maxYear),
-                        const Text('and'),
-                        _yearField(isStart: false, min: minYear, max: maxYear),
-                        InfoDot(
-                            message: Explain.yearRange, label: 'the years'),
-                        if (!isSimple) ...[
-                          const Text('at'),
-                          _dropdown<String?>(
-                            width: _fieldWidth,
-                            value: _timePeriod,
-                            hint: 'any time of year',
-                            entries: _facetEntries<String?>(
-                              anyOption: const DropdownMenuEntry(
-                                value: null,
-                                label: 'Any time of year',
-                              ),
-                              options: [
-                                for (final t in repo.timePeriods)
-                                  (t.label, t.label),
-                              ],
-                              available: (t) =>
-                                  facets.timePeriods.containsKey(t),
-                              priceable: (t) =>
-                                  (facets.timePeriods[t]?.priced ?? 0) > 0,
-                              selected: _timePeriod,
-                            ),
-                            onSelected: (v) => setState(() => _timePeriod = v),
-                          ),
-                        ],
-                      ]),
-                      if (!isSimple)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4, left: 2),
-                          child: Text(
-                            'Time of year mixes months, seasons and feast days, '
-                            'exactly as the records do.',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                ),
-                          ),
-                        ),
-                      // The slider itself is not here. It sits at the top
-                      // of the answer below, which is where he put it: "This
-                      // would also be the perfect place to put the year
-                      // slider if at all possible, so that you can very
-                      // quickly slide the date around to see how that changes
-                      // things." Watching a figure move while you drag only
-                      // works if the figure is on the screen with the handle.
-                      //
-                      // The two year boxes stay here, because they are part
-                      // of the sentence the form is asking you to read.
-
-                      // --- what ---
-                      //
-                      // The search box comes first because it is the way in
-                      // for anyone who does not already know the taxonomy:
-                      // type 'wheat' and all three levels are filled in. The
-                      // dropdowns stay for browsing, and follow it.
-                      _sentenceRow([
-                        const Text('Item:'),
-                        SizedBox(
-                          width: _fieldWidth,
-                          child: AutocompleteField(
-                            key: ValueKey(
-                              'item-search-'
-                              '${_category?.id}-${_subcategory?.id}-${_specific?.id}',
-                            ),
-                            label: 'Search all three levels',
-                            initialValue: _itemSearch,
-                            suggestions: _suggestionOrder(app, repo),
-                            helperText: 'e.g. wheat, oxen, thatching',
-                            onChanged: (text) => setState(() {
-                              _itemSearch = text;
-                              final match = repo.taxonomyPaths
-                                  .where((t) => t.label == text)
-                                  .firstOrNull;
-                              if (match == null) return;
-                              _category = match.category;
-                              _subcategory = match.subcategory;
-                              _specific = match.specific;
-                            }),
-                          ),
-                        ),
-                      ]),
-                      SizedBox(height: gap),
-                      _sentenceRow([
-                        const Text('or pick:'),
-                        _dropdown<CategoryOption?>(
-                          width: _fieldWidth,
-                          value: _category,
-                          hint: 'category',
-                          entries: _facetEntries<CategoryOption?>(
-                            anyOption: const DropdownMenuEntry(
-                              value: null,
-                              label: 'Any category',
-                            ),
-                            options: [for (final c in categories) (c, c.name)],
-                            available: (c) =>
-                                facets.categories.containsKey(c?.name),
-                            priceable: (c) =>
-                                (facets.categories[c?.name]?.priced ?? 0) > 0,
-                            selected: _category,
-                          ),
-                          onSelected: (v) => setState(() {
-                            _category = v;
-                            _subcategory = null;
-                            _specific = null;
-                            _itemSearch = v?.name ?? '';
-                          }),
-                        ),
-                        _dropdown<SubcategoryOption?>(
-                          width: _fieldWidth,
-                          value: _subcategory,
-                          hint: 'subcategory',
-                          enabled: _category != null,
-                          entries: _facetEntries<SubcategoryOption?>(
-                            anyOption: const DropdownMenuEntry(
-                              value: null,
-                              label: 'Any subcategory',
-                            ),
-                            options: [
-                              for (final s in subcategories) (s, s.name),
-                            ],
-                            available: (s) =>
-                                facets.subcategories.containsKey(s?.name),
-                            priceable: (s) =>
-                                (facets.subcategories[s?.name]?.priced ?? 0) >
-                                    0,
-                            selected: _subcategory,
-                          ),
-                          onSelected: (v) => setState(() {
-                            _subcategory = v;
-                            _specific = null;
-                            _itemSearch = [
-                              _category?.name,
-                              v?.name,
-                            ].whereType<String>().join(' / ');
-                          }),
-                        ),
-                        if (!isSimple)
-                          _dropdown<SpecificOption?>(
-                            width: _fieldWidth,
-                            value: _specific,
-                            hint: 'specific',
-                            enabled: _subcategory != null,
-                            entries: _facetEntries<SpecificOption?>(
-                              anyOption: const DropdownMenuEntry(
-                                value: null,
-                                label: 'Any specific',
-                              ),
-                              options: [for (final s in specifics) (s, s.name)],
-                              available: (s) =>
-                                  facets.specifics.containsKey(s?.name),
-                              priceable: (s) =>
-                                  (facets.specifics[s?.name]?.priced ?? 0) > 0,
-                              selected: _specific,
-                            ),
-                            onSelected: (v) => setState(() {
-                              _specific = v;
-                              _itemSearch = [
-                                _category?.name,
-                                _subcategory?.name,
-                                v?.name,
-                              ].whereType<String>().join(' / ');
-                            }),
-                          ),
-                      ]),
-                      SizedBox(height: gap),
                           ],
                         ),
-                      ),
-
-                      // --- in what unit ---
-                      // The control this whole rewrite exists to make
-                      // possible: the answer is computed per entry in
-                      // whichever unit is picked, not read from a fixed
-                      // column.
-                      TourTarget(
-                        stop: TourStop.searchUnit,
-                        child: _sentenceRow([
-                        const Text('returned value as pence per'),
-                        _dropdown<MetricItem?>(
-                          width: _fieldWidth,
-                          value: _outputUnit,
-                          hint: 'unit',
-                          // The one the screen exists for: labour counted by
-                          // the day cannot be priced per kilogram, and saying
-                          // so before the question is asked beats explaining it
-                          // after the answer comes back empty.
-                          entries: _facetEntries<MetricItem?>(
-                            options: [
-                              for (final u
-                                  in isSimple
-                                      ? _commonUnits(outputUnits)
-                                      : outputUnits)
-                                (u, u.menuLabel),
-                            ],
-                            available: (u) => facets.canPriceIn(u?.dimension),
-                            selected: _outputUnit,
+                        // The level's description is the first thing to go when
+                        // the screen is short: the chips below say the same in
+                        // one word each, and the room buys the Generate button a
+                        // place above the fold.
+                        if (!short) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            level.description,
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
                           ),
-                          onSelected: (v) => setState(() => _outputUnit = v),
+                        ],
+                        const SizedBox(height: 14),
+                        // Its own row rather than trailing the title: sharing a
+                        // Row with a Spacer left the chips a hair too little
+                        // width and clipped their last letter.
+                        Row(
+                          children: [
+                            Flexible(
+                              child: _ChoiceRow<DetailLevel>(
+                                values: DetailLevel.values,
+                                selected: level,
+                                labelOf: (d) => d.label,
+                                onSelected: (d) => prefs.detailLevel = d,
+                              ),
+                            ),
+                            InfoDot(
+                              message: Explain.detailLevel,
+                              label: 'the detail levels',
+                            ),
+                          ],
                         ),
-                      ])),
-                      if (!facets.canPriceIn(_outputUnit?.dimension))
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6, left: 2),
-                          child: Row(
+                        SizedBox(height: short ? Spacing.md : 20),
+
+                        TourTarget(
+                          stop: TourStop.searchForm,
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(
-                                Icons.straighten,
-                                size: 15,
-                                color: Theme.of(context).colorScheme.error,
-                              ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  'These are measured by '
-                                  '${facets.dimensionsInWords}, so none of '
-                                  'them can be priced per '
-                                  '${_outputUnit?.name ?? 'that unit'}. Pick '
-                                  'one of the units that is not crossed out.',
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.error,
+                              // --- where ---
+                              _sentenceRow([
+                                const Text('In'),
+                                if (countries.length == 1)
+                                  _fixedValue(context, countries.first.label)
+                                else
+                                  _dropdown<String?>(
+                                    width: _fieldWidth,
+                                    value: null,
+                                    hint: 'any country',
+                                    entries: [
+                                      const DropdownMenuEntry(
+                                        value: null,
+                                        label: 'Any country',
                                       ),
+                                      ...countries.map(
+                                        (c) => DropdownMenuEntry(
+                                          value: c.label,
+                                          label: c.label,
+                                        ),
+                                      ),
+                                    ],
+                                    onSelected: (_) {},
+                                  ),
+                                if (!isSimple) ...[
+                                  _dropdown<LookupItem?>(
+                                    width: _fieldWidth,
+                                    value: _county,
+                                    hint: 'any region',
+                                    entries: _facetEntries<LookupItem?>(
+                                      anyOption: const DropdownMenuEntry(
+                                        value: null,
+                                        label: 'Any region',
+                                      ),
+                                      options: [
+                                        for (final c in counties) (c, c.label),
+                                      ],
+                                      available: (c) =>
+                                          facets.counties.containsKey(c?.label),
+                                      priceable: (c) =>
+                                          (facets.counties[c?.label]?.priced ??
+                                              0) >
+                                          0,
+                                      selected: _county,
+                                    ),
+                                    onSelected: (v) => setState(() {
+                                      _county = v;
+                                      _locality = null;
+                                      _localityText = '';
+                                    }),
+                                  ),
+                                  InfoDot(
+                                    message: Explain.region,
+                                    label: 'the region',
+                                  ),
+                                  // Typed, not picked from a list.
+                                  //
+                                  // A DropdownMenu builds every one of its entries up
+                                  // front, and there are 789 localities: opening this
+                                  // screen locked the app for five seconds. It was
+                                  // also unusable — nobody scrolls to 'Wyllindone'.
+                                  // Keyed to the county so choosing one clears
+                                  // whatever locality was typed for the last.
+                                  SizedBox(
+                                    width: _fieldWidth,
+                                    child: AutocompleteField(
+                                      key: ValueKey('locality-${_county?.id}'),
+                                      label: 'Locality',
+                                      initialValue: _locality ?? '',
+                                      suggestions: localityNames,
+                                      helperText:
+                                          _locality == null &&
+                                              _localityText.trim().isNotEmpty
+                                          ? 'No locality of that name'
+                                          : 'Blank means any',
+                                      onChanged: (text) => setState(() {
+                                        _localityText = text;
+                                        // Only an exact name filters. Half-typed text
+                                        // would silently match nothing and look like
+                                        // an empty database.
+                                        _locality = localityNames.contains(text)
+                                            ? text
+                                            : null;
+                                      }),
+                                    ),
+                                  ),
+                                  InfoDot(
+                                    message: Explain.locality,
+                                    label: 'the locality',
+                                  ),
+                                ],
+                              ]),
+                              SizedBox(height: gap),
+
+                              // --- when ---
+                              _sentenceRow([
+                                const Text('Between the years'),
+                                _yearField(
+                                  isStart: true,
+                                  min: minYear,
+                                  max: maxYear,
                                 ),
-                              ),
+                                const Text('and'),
+                                _yearField(
+                                  isStart: false,
+                                  min: minYear,
+                                  max: maxYear,
+                                ),
+                                InfoDot(
+                                  message: Explain.yearRange,
+                                  label: 'the years',
+                                ),
+                                if (!isSimple) ...[
+                                  const Text('at'),
+                                  _dropdown<String?>(
+                                    width: _fieldWidth,
+                                    value: _timePeriod,
+                                    hint: 'any time of year',
+                                    entries: _facetEntries<String?>(
+                                      anyOption: const DropdownMenuEntry(
+                                        value: null,
+                                        label: 'Any time of year',
+                                      ),
+                                      options: [
+                                        for (final t in repo.timePeriods)
+                                          (t.label, t.label),
+                                      ],
+                                      available: (t) =>
+                                          facets.timePeriods.containsKey(t),
+                                      priceable: (t) =>
+                                          (facets.timePeriods[t]?.priced ?? 0) >
+                                          0,
+                                      selected: _timePeriod,
+                                    ),
+                                    onSelected: (v) =>
+                                        setState(() => _timePeriod = v),
+                                  ),
+                                  InfoDot(
+                                    message: Explain.timeOfYear,
+                                    label: 'the time of year',
+                                  ),
+                                ],
+                              ]),
+                              if (!isSimple)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    top: 4,
+                                    left: 2,
+                                  ),
+                                  child: Text(
+                                    'Time of year mixes months, seasons and feast days, '
+                                    'exactly as the records do.',
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.onSurfaceVariant,
+                                        ),
+                                  ),
+                                ),
+                              // The slider itself is not here. It sits at the top
+                              // of the answer below, which is where he put it: "This
+                              // would also be the perfect place to put the year
+                              // slider if at all possible, so that you can very
+                              // quickly slide the date around to see how that changes
+                              // things." Watching a figure move while you drag only
+                              // works if the figure is on the screen with the handle.
+                              //
+                              // The two year boxes stay here, because they are part
+                              // of the sentence the form is asking you to read.
+
+                              // --- what ---
+                              //
+                              // The search box comes first because it is the way in
+                              // for anyone who does not already know the taxonomy:
+                              // type 'wheat' and all three levels are filled in. The
+                              // dropdowns stay for browsing, and follow it.
+                              _sentenceRow([
+                                const Text('Item:'),
+                                SizedBox(
+                                  width: _fieldWidth,
+                                  // Not keyed on the choice: the field follows
+                                  // `_itemSearch` itself, and a key that changed with
+                                  // every pick threw the box away, focus and all.
+                                  child: AutocompleteField(
+                                    label: 'Search all three levels',
+                                    initialValue: _itemSearch,
+                                    suggestions: _suggestionOrder(app, repo),
+                                    helperText: 'e.g. wheat, oxen, thatching',
+                                    onChanged: (text) => setState(() {
+                                      _itemSearch = text;
+                                      final match = repo.taxonomyPaths
+                                          .where((t) => t.label == text)
+                                          .firstOrNull;
+                                      if (match == null) return;
+                                      _category = match.category;
+                                      _subcategory = match.subcategory;
+                                      _specific = match.specific;
+                                    }),
+                                  ),
+                                ),
+                                InfoDot(
+                                  message: Explain.itemSearch,
+                                  label: 'the item search',
+                                ),
+                              ]),
+                              SizedBox(height: gap),
+                              _sentenceRow([
+                                const Text('or pick:'),
+                                _dropdown<CategoryOption?>(
+                                  width: _fieldWidth,
+                                  value: _category,
+                                  hint: 'category',
+                                  entries: _facetEntries<CategoryOption?>(
+                                    anyOption: const DropdownMenuEntry(
+                                      value: null,
+                                      label: 'Any category',
+                                    ),
+                                    options: [
+                                      for (final c in categories) (c, c.name),
+                                    ],
+                                    available: (c) =>
+                                        facets.categories.containsKey(c?.name),
+                                    priceable: (c) =>
+                                        (facets.categories[c?.name]?.priced ??
+                                            0) >
+                                        0,
+                                    selected: _category,
+                                  ),
+                                  onSelected: (v) => setState(() {
+                                    _category = v;
+                                    _subcategory = null;
+                                    _specific = null;
+                                    _itemSearch = v?.name ?? '';
+                                  }),
+                                ),
+                                _dropdown<SubcategoryOption?>(
+                                  width: _fieldWidth,
+                                  value: _subcategory,
+                                  hint: 'subcategory',
+                                  enabled: _category != null,
+                                  entries: _facetEntries<SubcategoryOption?>(
+                                    anyOption: const DropdownMenuEntry(
+                                      value: null,
+                                      label: 'Any subcategory',
+                                    ),
+                                    options: [
+                                      for (final s in subcategories)
+                                        (s, s.name),
+                                    ],
+                                    available: (s) => facets.subcategories
+                                        .containsKey(s?.name),
+                                    priceable: (s) =>
+                                        (facets
+                                                .subcategories[s?.name]
+                                                ?.priced ??
+                                            0) >
+                                        0,
+                                    selected: _subcategory,
+                                  ),
+                                  onSelected: (v) => setState(() {
+                                    _subcategory = v;
+                                    _specific = null;
+                                    _itemSearch = [
+                                      _category?.name,
+                                      v?.name,
+                                    ].whereType<String>().join(' / ');
+                                  }),
+                                ),
+                                if (!isSimple)
+                                  _dropdown<SpecificOption?>(
+                                    width: _fieldWidth,
+                                    value: _specific,
+                                    hint: 'specific',
+                                    enabled: _subcategory != null,
+                                    entries: _facetEntries<SpecificOption?>(
+                                      anyOption: const DropdownMenuEntry(
+                                        value: null,
+                                        label: 'Any specific',
+                                      ),
+                                      options: [
+                                        for (final s in specifics) (s, s.name),
+                                      ],
+                                      available: (s) =>
+                                          facets.specifics.containsKey(s?.name),
+                                      priceable: (s) =>
+                                          (facets.specifics[s?.name]?.priced ??
+                                              0) >
+                                          0,
+                                      selected: _specific,
+                                    ),
+                                    onSelected: (v) => setState(() {
+                                      _specific = v;
+                                      _itemSearch = [
+                                        _category?.name,
+                                        _subcategory?.name,
+                                        v?.name,
+                                      ].whereType<String>().join(' / ');
+                                    }),
+                                  ),
+                                InfoDot(
+                                  message: Explain.item,
+                                  label: 'the item',
+                                ),
+                              ]),
+                              SizedBox(height: gap),
                             ],
                           ),
                         ),
-                      SizedBox(height: short ? Spacing.md : 20),
 
-                      Text(
-                        'Show',
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                      const SizedBox(height: 8),
-                      _ChoiceRow<AverageKind>(
-                        values: AverageKind.values,
-                        selected: _kind,
-                        labelOf: (k) => k.label,
-                        onSelected: (k) => setState(() => _kind = k),
-                      ),
-                      const SizedBox(height: 8),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: short,
-                        visualDensity: short ? VisualDensity.compact : null,
-                        title: const Text('Show original data entries'),
-                        value: _showEntries,
-                        onChanged: (v) => setState(() => _showEntries = v),
-                      ),
-                      SizedBox(height: gap),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          TextButton.icon(
-                            onPressed: () => _clearAll(minYear, maxYear),
-                            icon: const Icon(
-                              Icons.backspace_outlined,
-                              size: 17,
+                        // --- in what unit ---
+                        // The control this whole rewrite exists to make
+                        // possible: the answer is computed per entry in
+                        // whichever unit is picked, not read from a fixed
+                        // column.
+                        TourTarget(
+                          stop: TourStop.searchUnit,
+                          child: _sentenceRow([
+                            const Text('returned value as pence per'),
+                            _dropdown<MetricItem?>(
+                              width: _fieldWidth,
+                              value: _outputUnit,
+                              hint: 'unit',
+                              // The one the screen exists for: labour counted by
+                              // the day cannot be priced per kilogram, and saying
+                              // so before the question is asked beats explaining it
+                              // after the answer comes back empty.
+                              entries: _facetEntries<MetricItem?>(
+                                options: [
+                                  for (final u
+                                      in isSimple
+                                          ? _commonUnits(outputUnits)
+                                          : outputUnits)
+                                    (u, u.menuLabel),
+                                ],
+                                available: (u) =>
+                                    facets.canPriceIn(u?.dimension),
+                                selected: _outputUnit,
+                              ),
+                              onSelected: (v) =>
+                                  setState(() => _outputUnit = v),
                             ),
-                            label: const Text('Clear'),
+                            InfoDot(
+                              message: Explain.outputUnit,
+                              label: 'the unit',
+                            ),
+                          ]),
+                        ),
+                        if (!facets.canPriceIn(_outputUnit?.dimension))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6, left: 2),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  Icons.straighten,
+                                  size: 15,
+                                  color: Theme.of(context).colorScheme.error,
+                                ),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'These are measured by '
+                                    '${facets.dimensionsInWords}, so none of '
+                                    'them can be priced per '
+                                    '${_outputUnit?.name ?? 'that unit'}. Pick '
+                                    'one of the units that is not crossed out.',
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.error,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          const SizedBox(width: Spacing.sm),
-                          TourTarget(
-                            stop: TourStop.searchGenerate,
-                            child: FilledButton.icon(
-                            onPressed: _category == null
-                                ? null
-                                : () {
-                                    setState(() => _generated = true);
-                                    // After the frame, because the results do
-                                    // not exist to scroll to until this
-                                    // setState has been built.
-                                    WidgetsBinding.instance
-                                        .addPostFrameCallback((_) {
-                                      final box = _resultKey.currentContext;
-                                      if (box == null) return;
-                                      Scrollable.ensureVisible(
-                                        box,
-                                        duration: const Duration(
-                                            milliseconds: 350),
-                                        curve: Curves.easeOutCubic,
-                                        alignment: 0.05,
-                                      );
-                                    });
-                                  },
-                            icon: const Icon(Icons.auto_awesome, size: 18),
-                            label: const Text('Generate results'),
-                          )),
-                        ],
-                      ),
-                    ],
+                        SizedBox(height: short ? Spacing.md : 20),
+
+                        Row(
+                          children: [
+                            Text(
+                              'Show',
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            InfoDot(
+                              message: Explain.averageKind,
+                              label: 'which average',
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        _ChoiceRow<AverageKind>(
+                          values: AverageKind.values,
+                          selected: _kind,
+                          labelOf: (k) => k.label,
+                          onSelected: (k) => setState(() => _kind = k),
+                        ),
+                        const SizedBox(height: 8),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          dense: short,
+                          visualDensity: short ? VisualDensity.compact : null,
+                          title: Row(
+                            children: [
+                              const Flexible(
+                                child: Text('Show original data entries'),
+                              ),
+                              InfoDot(
+                                message: Explain.showEntries,
+                                label: 'showing the entries',
+                              ),
+                            ],
+                          ),
+                          value: _showEntries,
+                          onChanged: (v) => setState(() => _showEntries = v),
+                        ),
+                        SizedBox(height: gap),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => _clearAll(minYear, maxYear),
+                              icon: const Icon(
+                                Icons.backspace_outlined,
+                                size: 17,
+                              ),
+                              label: const Text('Clear'),
+                            ),
+                            const SizedBox(width: Spacing.sm),
+                            TourTarget(
+                              stop: TourStop.searchGenerate,
+                              child: FilledButton.icon(
+                                onPressed: _category == null
+                                    ? null
+                                    : () {
+                                        setState(() => _generated = true);
+                                        // After the frame, because the results do
+                                        // not exist to scroll to until this
+                                        // setState has been built.
+                                        WidgetsBinding.instance
+                                            .addPostFrameCallback((_) {
+                                              final box =
+                                                  _resultKey.currentContext;
+                                              if (box == null) return;
+                                              Scrollable.ensureVisible(
+                                                box,
+                                                duration: const Duration(
+                                                  milliseconds: 350,
+                                                ),
+                                                curve: Curves.easeOutCubic,
+                                                alignment: 0.05,
+                                              );
+                                            });
+                                      },
+                                icon: const Icon(Icons.auto_awesome, size: 18),
+                                label: const Text('Generate results'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              if (_generated && _category != null) ...[
-                KeyedSubtree(key: _resultKey, child: const SizedBox.shrink()),
-                const SizedBox(height: 20),
-                _ResultCard(
-                  level: level,
-                  minYear: minYear,
-                  maxYear: maxYear,
-                  onYearsChanged: (r) => setState(() => _yearRange = r),
-                  query: _Query(
-                    category: _category,
-                    subcategory: _subcategory,
-                    specific: isSimple ? null : _specific,
-                    years: _yearRange!,
-                    county: isSimple ? null : _county?.label,
-                    locality: isSimple ? null : _locality,
-                    timePeriod: isSimple ? null : _timePeriod,
-                    outputUnit: _outputUnit,
-                    kind: _kind,
-                    showEntries: _showEntries,
+                if (_generated && _category != null) ...[
+                  KeyedSubtree(key: _resultKey, child: const SizedBox.shrink()),
+                  const SizedBox(height: 20),
+                  _ResultCard(
+                    level: level,
+                    minYear: minYear,
+                    maxYear: maxYear,
+                    onYearsChanged: (r) => setState(() => _yearRange = r),
+                    query: _Query(
+                      category: _category,
+                      subcategory: _subcategory,
+                      // At every level, unlike the three below. Basics has no
+                      // dropdown for the specific, but its item box sets one
+                      // and shows it: dropping it there answered "wheat" with
+                      // every grain, under a heading that quietly said Grain.
+                      specific: _specific,
+                      years: _yearRange!,
+                      county: isSimple ? null : _county?.label,
+                      locality: isSimple ? null : _locality,
+                      timePeriod: isSimple ? null : _timePeriod,
+                      outputUnit: _outputUnit,
+                      kind: _kind,
+                      showEntries: _showEntries,
+                    ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -824,13 +918,13 @@ class _SimpleViewState extends State<SimpleView> {
   /// The one answer that always exists, and the most comparable one that
   /// does.
   ///
-  /// See [MetricItem.comparableUnit]. This was Kilograms, which left a reader
-  /// who picked a unit the selection cannot express with an empty screen and
-  /// no way back; then the recorded unit, which always answers but leaves one
-  /// grain record in quarters and the next in bushels.
+  /// This was Kilograms, which left a reader who picked a unit the selection
+  /// cannot express with an empty screen and no way back; then the modern
+  /// units ([MetricItem.comparableUnit]); and now, at the researcher's
+  /// request, the measure each record used again, the same default as Data
+  /// Display.
   MetricItem? _defaultOutputUnit(List<MetricItem> units) =>
-      MetricItem.comparableUnit;
-
+      MetricItem.recordedUnit;
 
   /// A short list for the simple view. 97 output units is a research tool, not
   /// a question to put to somebody who wants the price of wheat.
@@ -839,9 +933,9 @@ class _SimpleViewState extends State<SimpleView> {
     // database is unanswerable here. Labour is paid by the day and stock is
     // sold by the head; offering only units of mass left those categories
     // with nothing to be priced in at all.
-    const wanted = [
-      'comparable unit',
-      'Recorded unit',
+    final wanted = [
+      MetricItem.recordedUnit.name,
+      MetricItem.comparableUnit.name,
       'Kilograms',
       'Grams',
       'Litres',
@@ -901,20 +995,26 @@ class _SimpleViewState extends State<SimpleView> {
         // has already said which years these are.
         decoration: InputDecoration(
           labelText: isStart ? 'From' : 'to',
+          // Out of the Tab order, like every cross: from the keyboard the
+          // year is simply typed back.
           suffixIcon: moved
-              ? IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: 'Back to ${bound.round()}',
-                  padding: EdgeInsets.zero,
-                  onPressed: () => setState(() {
-                    _yearRange = isStart
-                        ? RangeValues(bound, _yearRange!.end)
-                        : RangeValues(_yearRange!.start, bound);
-                  }),
+              ? ExcludeFocus(
+                  child: IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Back to ${bound.round()}',
+                    padding: EdgeInsets.zero,
+                    onPressed: () => setState(() {
+                      _yearRange = isStart
+                          ? RangeValues(bound, _yearRange!.end)
+                          : RangeValues(_yearRange!.start, bound);
+                    }),
+                  ),
                 )
               : null,
-          suffixIconConstraints:
-              const BoxConstraints(minWidth: 36, minHeight: 36),
+          suffixIconConstraints: const BoxConstraints(
+            minWidth: 36,
+            minHeight: 36,
+          ),
         ),
         onChanged: (text) {
           final v = double.tryParse(text);
@@ -1025,14 +1125,12 @@ class _ResultCard extends StatelessWidget {
     final trend = <YearPoint>[];
     for (final year in byYear.keys.toList()..sort()) {
       final v = byYear[year]!..sort();
-      trend.add(YearPoint(
-        year: year,
-        median: v[v.length ~/ 2],
-        count: v.length,
-      ));
+      trend.add(
+        YearPoint(year: year, median: v[v.length ~/ 2], count: v.length),
+      );
     }
-    // Lower case in a sentence: "1.6 pence per comparable unit" reads as
-    // English, "per Comparable unit" reads as a variable name.
+    // Lower case in a sentence: "1.6 pence per modern unit" reads as
+    // English, "per Modern unit" reads as a variable name.
     final unitName = query.outputUnit?.name ?? 'unit';
 
     return Card(
@@ -1110,10 +1208,7 @@ class _ResultCard extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: PriceTrendChart(
-                      points: trend,
-                      unitName: unitName,
-                    ),
+                    child: PriceTrendChart(points: trend, unitName: unitName),
                   ),
                   InfoDot(message: Explain.graph, label: 'this chart'),
                 ],
@@ -1416,10 +1511,13 @@ class _YearSlider extends StatelessWidget {
       padding: const EdgeInsets.only(left: Spacing.sm, right: Spacing.sm),
       child: Row(
         children: [
-          Text('$min',
-              style: theme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontFeatures: const [tabularFigures])),
+          Text(
+            '$min',
+            style: theme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontFeatures: const [tabularFigures],
+            ),
+          ),
           Expanded(
             child: RangeSlider(
               min: min.toDouble(),
@@ -1430,16 +1528,18 @@ class _YearSlider extends StatelessWidget {
                 '${values.start.round()}',
                 '${values.end.round()}',
               ),
-              onChanged: (r) => onChanged(RangeValues(
-                r.start.roundToDouble(),
-                r.end.roundToDouble(),
-              )),
+              onChanged: (r) => onChanged(
+                RangeValues(r.start.roundToDouble(), r.end.roundToDouble()),
+              ),
             ),
           ),
-          Text('$max',
-              style: theme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontFeatures: const [tabularFigures])),
+          Text(
+            '$max',
+            style: theme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontFeatures: const [tabularFigures],
+            ),
+          ),
         ],
       ),
     );
@@ -1455,11 +1555,11 @@ class _QueryLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final base = Theme.of(context).textTheme.titleMedium;
-    final parts = [query.category?.name, query.subcategory?.name,
-            query.specific?.name]
-        .where((p) => p != null && p.isNotEmpty)
-        .cast<String>()
-        .toList();
+    final parts = [
+      query.category?.name,
+      query.subcategory?.name,
+      query.specific?.name,
+    ].where((p) => p != null && p.isNotEmpty).cast<String>().toList();
     if (parts.isEmpty) return Text('—', style: base);
 
     return Text.rich(

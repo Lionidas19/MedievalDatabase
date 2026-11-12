@@ -820,6 +820,15 @@ for r, values in rows_of("Data", DATA_FIRST_ROW, DATA_LAST_ROW):
     # scroll through, and they are why it claimed 7,800 entries while 7,501
     # said anything. The researcher confirmed they can go.
     #
+    # Entries 7441-7501 go too, but NOT here. They carry an item and a page
+    # number as well as the year, so they pass the rule above, and a rule
+    # that dropped them would also drop a stub the researcher had genuinely
+    # started. They are deleted by migration step 1 instead, which means a
+    # fresh import has to be followed by `python tools/migrate.py` to end up
+    # where the shipped database already is. That is the arrangement this
+    # importer and that runner exist to keep: the ETL produces version 0 and
+    # the steps carry it forward.
+    #
     # Country, Source and the measure dropdowns are deliberately absent from
     # the test below. The sheet stamps them on blank rows by default, so
     # counting them as content would make every empty row look occupied.

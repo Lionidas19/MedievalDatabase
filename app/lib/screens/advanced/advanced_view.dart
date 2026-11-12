@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/models.dart';
@@ -9,6 +10,9 @@ import '../../state/app_controller.dart';
 import '../../state/view_preferences.dart';
 import '../../theme.dart';
 import '../../widgets/item_label.dart';
+import '../../widgets/keyboard_help.dart';
+import '../../widgets/record_notes.dart';
+import '../tour/tour.dart';
 import 'edit_entry_dialog.dart';
 import 'entry_columns.dart';
 import 'entry_details_dialog.dart';
@@ -31,9 +35,7 @@ Future<void> openEntryEditor(BuildContext context, PriceEntry entry) async {
     onDelete: () {
       app.deleteEntry(entry.entryId);
       messenger.showSnackBar(
-        SnackBar(
-          content: Text('Deleted entry #${entry.legacyEntryNo ?? ''}'),
-        ),
+        SnackBar(content: Text('Deleted entry #${entry.legacyEntryNo ?? ''}')),
       );
     },
   );
@@ -69,9 +71,15 @@ Future<void> createEntry(BuildContext context) async {
 ///
 /// The two are deliberately separate acts: see `entry_details_dialog.dart`.
 Future<void> _readEntry(
-    BuildContext context, PricedEntry priced, String unitName) async {
-  final wantsEdit =
-      await showEntryDetails(context, priced: priced, unitName: unitName);
+  BuildContext context,
+  PricedEntry priced,
+  String unitName,
+) async {
+  final wantsEdit = await showEntryDetails(
+    context,
+    priced: priced,
+    unitName: unitName,
+  );
   if (!wantsEdit || !context.mounted) return;
   await openEntryEditor(context, priced.entry);
 }
@@ -87,6 +95,7 @@ class _ResultKey {
     required this.revision,
     required this.search,
     required this.county,
+    required this.locality,
     required this.category,
     required this.dateFilter,
     required this.yearStart,
@@ -101,6 +110,7 @@ class _ResultKey {
   final int revision;
   final String search;
   final String? county;
+  final String? locality;
   final String? category;
   final DateFilter dateFilter;
   final double yearStart;
@@ -117,6 +127,7 @@ class _ResultKey {
       other.revision == revision &&
       other.search == search &&
       other.county == county &&
+      other.locality == locality &&
       other.category == category &&
       other.dateFilter == dateFilter &&
       other.yearStart == yearStart &&
@@ -128,9 +139,21 @@ class _ResultKey {
       other.estimating == estimating;
 
   @override
-  int get hashCode => Object.hash(revision, search, county, category,
-      dateFilter, yearStart, yearEnd, unitId, sortColumnId, ascending, groupBy,
-      estimating);
+  int get hashCode => Object.hash(
+    revision,
+    search,
+    county,
+    locality,
+    category,
+    dateFilter,
+    yearStart,
+    yearEnd,
+    unitId,
+    sortColumnId,
+    ascending,
+    groupBy,
+    estimating,
+  );
 }
 
 class AdvancedView extends StatefulWidget {
@@ -162,6 +185,37 @@ class _AdvancedViewState extends State<AdvancedView> {
   /// Off by default, and deliberately so. Every other figure here is something
   /// the source says; these are guesses, and a reader should have to ask.
   bool _estimating = false;
+
+  /// The search box and the table, so the keyboard can pass between them:
+  /// `/` from the table to the search, Enter from the search to the results.
+  final _searchFocus = FocusNode(debugLabel: 'search');
+  final _tableFocus = FocusNode(debugLabel: 'entry table');
+
+  /// Coming back to this screen puts the keyboard back on the table, where
+  /// arriving on the page first put it. Leaving took it away (see the shell's
+  /// `ExcludeFocus`), and without this the arrow keys did nothing on return.
+  @override
+  void didUpdateWidget(AdvancedView old) {
+    super.didUpdateWidget(old);
+    if (widget.active && !old.active) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Not while the tour is running. It brings this screen up itself,
+        // and taking focus here pulled the keys out of the tour and into the
+        // table: Right scrolled the columns instead of moving to the next
+        // step.
+        if (mounted && _tableFocus.context != null && !Tour.isRunning) {
+          _tableFocus.requestFocus();
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchFocus.dispose();
+    _tableFocus.dispose();
+    super.dispose();
+  }
 
   _ResultKey? _cacheKey;
   List<EntryGroup> _cached = const [];
@@ -198,11 +252,15 @@ class _AdvancedViewState extends State<AdvancedView> {
 
   /// Filters, prices, sorts and groups — once per distinct [_ResultKey].
   List<EntryGroup> _results(
-      AppController app, ViewPreferences prefs, EntryColumn? sortColumn) {
+    AppController app,
+    ViewPreferences prefs,
+    EntryColumn? sortColumn,
+  ) {
     final key = _ResultKey(
       revision: app.revision,
       search: _filters.search.trim().toLowerCase(),
       county: _filters.county,
+      locality: _filters.locality,
       category: _filters.category,
       dateFilter: _filters.dateFilter,
       yearStart: _filters.years?.start ?? 0,
@@ -231,12 +289,15 @@ class _AdvancedViewState extends State<AdvancedView> {
       // DatabaseRepository.modernPoundsPerPenny. Null for a year with no
       // factor, which yields dashes rather than invented pounds.
       final p = e.pricedIn(_outputUnit, modernPoundsPerPenny: modern[e.year]);
-      priced.add(PricedEntry(
-        entry: e,
-        calc: p.calc,
-        perUnit: p.perUnit,
-        comparable: p.comparable,
-      ));
+      priced.add(
+        PricedEntry(
+          entry: e,
+          calc: p.calc,
+          perUnit: p.perUnit,
+          modernPerUnit: p.modern,
+          comparable: p.comparable,
+        ),
+      );
     }
     if (_estimating) {
       _estimate(priced);
@@ -249,8 +310,9 @@ class _AdvancedViewState extends State<AdvancedView> {
     // the column's doing: it is about which rows can answer the question the
     // reader asked.
     final sortKey = sortColumn?.sortKey;
-    priced.sort((a, b) =>
-        comparePricedEntries(a, b, key: sortKey, ascending: _ascending));
+    priced.sort(
+      (a, b) => comparePricedEntries(a, b, key: sortKey, ascending: _ascending),
+    );
 
     _cacheKey = key;
     _matchCount = priced.length;
@@ -302,7 +364,9 @@ class _AdvancedViewState extends State<AdvancedView> {
     Trend? trendFor(String? key, String basis) {
       if (key == null) return null;
       return trends.putIfAbsent(
-          key, () => fitTrend(observations[key] ?? const [], basis: basis));
+        key,
+        () => fitTrend(observations[key] ?? const [], basis: basis),
+      );
     }
 
     for (var i = 0; i < priced.length; i++) {
@@ -310,9 +374,12 @@ class _AdvancedViewState extends State<AdvancedView> {
       final year = p.entry.year;
       if (p.perUnit != null || year == null || !p.comparable) continue;
 
-      final trend = trendFor(p.entry.specific, p.entry.categoryLabel) ??
-          trendFor(p.entry.subcategory,
-              '${p.entry.category ?? '?'} / ${p.entry.subcategory}') ??
+      final trend =
+          trendFor(p.entry.specific, p.entry.categoryLabel) ??
+          trendFor(
+            p.entry.subcategory,
+            '${p.entry.category ?? '?'} / ${p.entry.subcategory}',
+          ) ??
           trendFor(p.entry.category, p.entry.category ?? '?');
       final value = trend?.at(year);
       if (trend == null || value == null) continue;
@@ -342,20 +409,20 @@ class _AdvancedViewState extends State<AdvancedView> {
       buckets.putIfAbsent(_labelFor(row.entry, by), () => []).add(row);
     }
     return [
-      for (final entry in buckets.entries) _makeGroup(entry.key, entry.value)
+      for (final entry in buckets.entries) _makeGroup(entry.key, entry.value),
     ];
   }
 
   String _labelFor(PriceEntry e, GroupBy by) => switch (by) {
-        GroupBy.none => '',
-        GroupBy.year => e.year?.toString() ?? 'Undated',
-        GroupBy.county => e.county ?? 'No county recorded',
-        GroupBy.category => e.category ?? 'Uncategorised',
-        GroupBy.dimension => switch (e.primaryMeasure?.dimension) {
-            null => 'Kind of measure not yet classified',
-            final d => 'Measured by $d',
-          },
-      };
+    GroupBy.none => '',
+    GroupBy.year => e.year?.toString() ?? 'Undated',
+    GroupBy.county => e.county ?? 'No county recorded',
+    GroupBy.category => e.category ?? 'Uncategorised',
+    GroupBy.dimension => switch (e.primaryMeasure?.dimension) {
+      null => 'Kind of measure not yet classified',
+      final d => 'Measured by $d',
+    },
+  };
 
   /// Builds a group and its median price per the chosen unit.
   ///
@@ -366,7 +433,7 @@ class _AdvancedViewState extends State<AdvancedView> {
   EntryGroup _makeGroup(String label, List<PricedEntry> rows) {
     final values = [
       for (final r in rows)
-        if (r.perUnit != null) r.perUnit!
+        if (r.perUnit != null) r.perUnit!,
     ]..sort();
     double? median;
     if (values.isNotEmpty) {
@@ -396,15 +463,16 @@ class _AdvancedViewState extends State<AdvancedView> {
 
     _filters = _filters.years == null
         ? _filters.copyWith(
-            years: RangeValues(minYear.toDouble(), maxYear.toDouble()))
+            years: RangeValues(minYear.toDouble(), maxYear.toDouble()),
+          )
         : _filters;
 
     // The recorded unit leads the list: it is the default, and it is where a
     // reader who has narrowed themselves into an unanswerable question comes
     // back to.
     final outputUnits = [
-      MetricItem.comparableUnit,
       MetricItem.recordedUnit,
+      MetricItem.comparableUnit,
       ...repo.outputUnitChoices,
     ];
     _outputUnit ??= _defaultOutputUnit(outputUnits);
@@ -416,8 +484,12 @@ class _AdvancedViewState extends State<AdvancedView> {
     final unitName = _outputUnit?.name ?? 'unit';
     // Null where the database carries no conversion factors, which hides the
     // modern-money columns rather than showing a column of dashes.
-    final columns = columnsFor(prefs.detailLevel, unitName,
-        modernYear: app.repository.modernMoneyYear);
+    final columns = columnsFor(
+      prefs.detailLevel,
+      unitName,
+      modernYear: app.repository.modernMoneyYear,
+      counts: app.repository.entryCounts,
+    );
 
     // The sorted column can vanish when the detail level narrows — sort by
     // Workers, drop to Basics, and there is nothing left to sort by.
@@ -426,66 +498,102 @@ class _AdvancedViewState extends State<AdvancedView> {
         .firstOrNull;
     final groups = _results(app, prefs, sortColumn);
 
-    return Column(
-      // Stretch, not the default centre. The filter bar sizes to its widest
-      // row, so centred it drifted left and right as the facet panel opened
-      // and closed, and never lined up with the table beneath it.
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        FilterBar(
-          filters: _filters,
-          onFiltersChanged: (f) => setState(() => _filters = f),
-          counties: repo.filterCounties.map((c) => c.label).toList(),
-          categories: repo.categories.map((c) => c.name).toList(),
-          outputUnits: outputUnits,
-          outputUnit: _outputUnit,
-          onOutputUnitChanged: (v) => setState(() => _outputUnit = v),
-          minYear: minYear,
-          maxYear: maxYear,
-          resultCount: _matchCount,
-          totalCount: app.entries.length,
-          undatedTotal: app.entries.where((e) => e.year == null).length,
-          estimating: _estimating,
-          onEstimatingChanged: (v) => setState(() => _estimating = v),
-          onReset: () => _resetEverything(prefs, minYear, maxYear),
-          estimateCount: _estimateCount,
-          dense: short,
-          compact: compact,
-          entries: app.entries,
-          onNewEntry: () => createEntry(context),
-          stats: _stats,
-          statsWithEstimates: _statsWithEstimates,
-          brief: narrow,
-        ),
-        Expanded(
-          child: _matchCount == 0
-              ? _NothingFound(
-                  onClear: () => setState(() => _filters = FilterState(
+    // `/` reaches the search box from anywhere on this screen, not only from
+    // the table: from a heading, a chip, the Price per box. A key pressed
+    // with focus anywhere below bubbles up to here. Not while typing, where
+    // a slash is a slash.
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: (_, event) {
+        if (event is KeyDownEvent &&
+            event.character == '/' &&
+            !isTypingText()) {
+          _searchFocus.requestFocus();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Column(
+        // Stretch, not the default centre. The filter bar sizes to its widest
+        // row, so centred it drifted left and right as the facet panel opened
+        // and closed, and never lined up with the table beneath it.
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilterBar(
+            filters: _filters,
+            onFiltersChanged: (f) => setState(() => _filters = f),
+            counties: repo.filterCounties.map((c) => c.label).toList(),
+            categories: repo.categories.map((c) => c.name).toList(),
+            outputUnits: outputUnits,
+            outputUnit: _outputUnit,
+            onOutputUnitChanged: (v) => setState(() => _outputUnit = v),
+            minYear: minYear,
+            maxYear: maxYear,
+            resultCount: _matchCount,
+            totalCount: app.entries.length,
+            undatedTotal: app.entries.where((e) => e.year == null).length,
+            estimating: _estimating,
+            onEstimatingChanged: (v) => setState(() => _estimating = v),
+            onReset: () => _resetEverything(prefs, minYear, maxYear),
+            estimateCount: _estimateCount,
+            dense: short,
+            compact: compact,
+            entries: app.entries,
+            onNewEntry: () => createEntry(context),
+            stats: _stats,
+            statsWithEstimates: _statsWithEstimates,
+            brief: narrow,
+            searchFocus: _searchFocus,
+            onSearchSubmitted: _tableFocus.requestFocus,
+          ),
+          Expanded(
+            child: _matchCount == 0
+                ? _NothingFound(
+                    onClear: () => setState(
+                      () => _filters = FilterState(
                         years: RangeValues(
-                            minYear.toDouble(), maxYear.toDouble()),
-                      )),
-                )
-              : compact
-                  ? _CompactList(
-                      groups: groups,
-                      unitName: unitName,
-                      level: prefs.detailLevel,
-                      showHeadings: prefs.groupBy != GroupBy.none,
-                    )
-                  : EntryTable(
-                      groups: groups,
-                      columns: columns,
-                      rowHeight: prefs.density.rowHeight,
-                      sortColumnId: sortColumn?.id,
-                      ascending: _ascending,
-                      onSort: _toggleSort,
-                      onOpen: (e) => openEntryEditor(context, e),
-                      onRead: (p) => _readEntry(context, p, unitName),
-                      unitName: unitName,
-                      showGroupHeaders: prefs.groupBy != GroupBy.none,
+                          minYear.toDouble(),
+                          maxYear.toDouble(),
+                        ),
+                      ),
                     ),
-        ),
-      ],
+                  )
+                : compact
+                ? _CompactList(
+                    groups: groups,
+                    unitName: unitName,
+                    level: prefs.detailLevel,
+                    showHeadings: prefs.groupBy != GroupBy.none,
+                  )
+                : EntryTable(
+                    groups: groups,
+                    columns: columns,
+                    rowHeight: prefs.density.rowHeight,
+                    sortColumnId: sortColumn?.id,
+                    ascending: _ascending,
+                    onSort: _toggleSort,
+                    onOpen: (e) => openEntryEditor(context, e),
+                    onRead: (p) => _readEntry(context, p, unitName),
+                    unitName: unitName,
+                    showGroupHeaders: prefs.groupBy != GroupBy.none,
+                    focusNode: _tableFocus,
+                    onFind: _searchFocus.requestFocus,
+                    onCopied: () => ScaffoldMessenger.of(context)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Row copied. It pastes into a spreadsheet as one '
+                            'row, with the headings above it.',
+                          ),
+                          duration: Duration(seconds: 3),
+                        ),
+                      ),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -500,7 +608,7 @@ class _AdvancedViewState extends State<AdvancedView> {
       _filters = FilterState(
         years: RangeValues(minYear.toDouble(), maxYear.toDouble()),
       );
-      _outputUnit = MetricItem.comparableUnit;
+      _outputUnit = MetricItem.recordedUnit;
       _sortColumnId = 'year';
       _ascending = true;
       _estimating = false;
@@ -514,8 +622,9 @@ class _AdvancedViewState extends State<AdvancedView> {
   /// unit and got nothing back could not tell whether the app was broken or
   /// the question was unanswerable, and had no way to return. Pricing each
   /// entry by the measure the source itself used cannot come back empty.
+  /// It was the modern units for a while; the researcher asked for this back.
   MetricItem _defaultOutputUnit(List<MetricItem> units) =>
-      MetricItem.comparableUnit;
+      MetricItem.recordedUnit;
 }
 
 /// What the table shows when every row has been filtered away.
@@ -537,8 +646,10 @@ class _NothingFound extends StatelessWidget {
         children: [
           Icon(Icons.search_off_outlined, size: 40, color: scheme.outline),
           const SizedBox(height: Spacing.md),
-          Text('Nothing matches these filters',
-              style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            'Nothing matches these filters',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: Spacing.xs),
           SizedBox(
             width: 340,
@@ -546,10 +657,9 @@ class _NothingFound extends StatelessWidget {
               'The records are still there — this combination of filters is '
               'what has nothing behind it.',
               textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
           const SizedBox(height: Spacing.lg),
@@ -569,7 +679,11 @@ class _NothingFound extends StatelessWidget {
 /// A table with twenty-six columns is not a phone layout, so this shows the
 /// same rows as cards. The detail level still applies: it decides how much of
 /// each entry the card carries, rather than being ignored on small screens.
-class _CompactList extends StatelessWidget {
+///
+/// Grouped, the headings open and close as the table's do, and start closed
+/// for the same reason: a column of years with a median on each is the
+/// comparison the grouping is for. See `entry_table.dart`.
+class _CompactList extends StatefulWidget {
   const _CompactList({
     required this.groups,
     required this.unitName,
@@ -583,37 +697,119 @@ class _CompactList extends StatelessWidget {
   final bool showHeadings;
 
   @override
+  State<_CompactList> createState() => _CompactListState();
+}
+
+class _CompactListState extends State<_CompactList> {
+  final Set<String> _open = {};
+
+  bool _isOpen(EntryGroup g) => !widget.showHeadings || _open.contains(g.label);
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final groups = widget.groups;
+    final unitName = widget.unitName;
+    final level = widget.level;
+    final showHeadings = widget.showHeadings;
+    final openCount = groups.where(_isOpen).length;
     return CustomScrollView(
       slivers: [
+        if (showHeadings)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                Spacing.md,
+                Spacing.sm,
+                Spacing.sm,
+                0,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      openCount == 0
+                          ? '${groups.length} groups. Tap one to open it.'
+                          : '$openCount of ${groups.length} open',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: openCount == groups.length
+                        ? null
+                        : () => setState(
+                            () => _open.addAll(groups.map((g) => g.label)),
+                          ),
+                    child: const Text('Open all'),
+                  ),
+                  TextButton(
+                    onPressed: openCount == 0
+                        ? null
+                        : () => setState(_open.clear),
+                    child: const Text('Close all'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         for (final group in groups) ...[
           if (showHeadings)
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(
-                  Spacing.md, Spacing.lg, Spacing.md, Spacing.sm),
+                Spacing.sm,
+                Spacing.xs,
+                Spacing.sm,
+                Spacing.xs,
+              ),
               sliver: SliverToBoxAdapter(
-                child: Text(
-                  '${group.label} · ${group.rows.length} '
-                  '${group.rows.length == 1 ? 'entry' : 'entries'}'
-                  '${group.median == null ? '' : ' · median '
-                      '${formatPence(group.median)} pence per $unitName'}',
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleSmall
-                      ?.copyWith(color: scheme.onSurfaceVariant),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(Radii.md),
+                  onTap: () => setState(() {
+                    if (!_open.remove(group.label)) _open.add(group.label);
+                  }),
+                  child: Padding(
+                    padding: const EdgeInsets.all(Spacing.sm),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _isOpen(group)
+                              ? Icons.expand_more
+                              : Icons.chevron_right,
+                          size: 20,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: Spacing.xs),
+                        Expanded(
+                          child: Text(
+                            '${group.label} · ${group.rows.length} '
+                            '${group.rows.length == 1 ? 'entry' : 'entries'}'
+                            '${group.median == null ? '' : ' · median '
+                                      '${formatPence(group.median)} pence per $unitName'}',
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
-            sliver: SliverList.separated(
-              itemCount: group.rows.length,
-              separatorBuilder: (_, _) => const SizedBox(height: Spacing.sm),
-              itemBuilder: (context, i) =>
-                  _EntryCard(priced: group.rows[i], unitName: unitName, level: level),
+          if (_isOpen(group))
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
+              sliver: SliverList.separated(
+                itemCount: group.rows.length,
+                separatorBuilder: (_, _) => const SizedBox(height: Spacing.sm),
+                itemBuilder: (context, i) => _EntryCard(
+                  priced: group.rows[i],
+                  unitName: unitName,
+                  level: level,
+                ),
+              ),
             ),
-          ),
         ],
         const SliverToBoxAdapter(child: SizedBox(height: Spacing.md)),
       ],
@@ -641,8 +837,7 @@ class _EntryCard extends StatelessWidget {
       priced.perUnit == null
           ? (reason ?? 'No price per $unitName')
           : '${formatPence(priced.perUnit)} pence per $unitName',
-      if (level.atLeastDetailed) e.quantityLabel,
-      if (level.isEverything && e.statusInfo != null) e.statusInfo!,
+      e.quantityLabel,
       if (level.isEverything && e.sourceCitation != null)
         '${e.sourceCitation}${e.page == null ? '' : ', p. ${e.page}'}',
     ];
@@ -654,6 +849,7 @@ class _EntryCard extends StatelessWidget {
         title: Row(
           children: [
             Flexible(child: ItemLabel(entry: e, emphasise: true)),
+            RecordNotesMark(entry: e),
             Text(' — ${e.priceLabel}'),
           ],
         ),

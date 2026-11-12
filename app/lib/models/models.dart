@@ -1,5 +1,10 @@
 import '../services/pricing.dart';
 
+/// How many entries there are, and how many carry a time of year and a day
+/// of the month. Counted by `DatabaseRepository.entryCounts`, for the
+/// sentences that quote them.
+typedef EntryCounts = ({int total, int timed, int dated});
+
 /// Whether a quantity measured in a unit of dimension [a] can honestly be
 /// expressed in one of dimension [b].
 ///
@@ -86,12 +91,17 @@ class MetricItem {
 
   bool get isRecordedUnit => id == recordedUnit.id;
 
-  /// The one option that can price anything, and the default in both views.
+  /// The one option that can price anything in modern units.
   ///
   /// His request, in his words: "a new all-inclusive option ... so that it
   /// always generates an outcome". What he named it, `Heads/Unit/Kilograms`,
   /// is what it does: each record is priced per kilogram, per litre, per
-  /// metre or per head, whichever its own measure is a kind of.
+  /// metre or per head, whichever its own measure is a kind of. It was the
+  /// default for a while; the researcher has since asked for the default to
+  /// be [recordedUnit] again, and for this to be offered as "Modern".
+  ///
+  /// `name` is how it reads inside a sentence ("pence per modern unit"); the
+  /// chooser calls it by [menuLabel].
   ///
   /// This is not the same as [recordedUnit], and the difference is the point.
   /// Priced by its own measure, one grain record reads as pence per quarter
@@ -102,7 +112,7 @@ class MetricItem {
   /// nobody has classified fall back to the recorded price, so this still
   /// never returns an empty column, which was the whole of his point.
   static const comparableUnit =
-      MetricItem('__comparable__', 'comparable unit', null);
+      MetricItem('__comparable__', 'modern unit', null);
 
   bool get isComparableUnit => id == comparableUnit.id;
 
@@ -132,21 +142,15 @@ class MetricItem {
   static MetricItem? baseFor(String? dimension) =>
       dimension == null ? null : _bases[dimension];
 
-  /// How this unit is named in a chooser, as opposed to in a column heading.
+  /// How this unit is named in a chooser, as opposed to in a sentence.
   ///
-  /// The sentinel is called **Default** here because that is what he asked
-  /// for: "The user then didn't know how to fix the 'price per' as there was
-  /// no 'default' option that they could scroll to... Therefore a 'Default'
-  /// option should exist". His suggested name for it was
-  /// `Heads/Unit/Kilograms`, meaning one option that always produces an
-  /// answer; pricing each record by the measure its own source used is that
-  /// option, and is honest about quarters and acres besides, which his three
-  /// names leave out.
-  ///
-  /// `name` stays 'Recorded unit' because it is what the per-unit column
-  /// heading is built from, and 'Pence per Default' would say nothing.
+  /// Both labels are the researcher's own, from his notes on the tutorial:
+  /// "please replace 'Default (Heads/Unit/Kilograms)' with 'Modern (# or
+  /// Metric Kg)' and make the default be 'the measure each record used'". The
+  /// # is his shorthand for a count of heads or units, and is kept because it
+  /// is the label he will look for.
   String get menuLabel => isComparableUnit
-      ? 'Default (Heads/Unit/Kilograms)'
+      ? 'Modern (# or Metric Kg)'
       : isRecordedUnit
           ? 'The measure each record used'
           : dimension == null
@@ -467,7 +471,11 @@ class PriceEntry {
     final p = pounds ?? 0;
     final s = shillings ?? 0;
     final d = pence ?? 0;
-    if (p == 0 && s == 0 && d == 0) return '—';
+    // A dash for no price, and "0d" for a price of nothing, which a few
+    // records genuinely give. Both used to read as a dash, while the columns
+    // beside it said 0 and £0.00, so the row disagreed with itself.
+    if (pounds == null && shillings == null && pence == null) return '—';
+    if (p == 0 && s == 0 && d == 0) return '0d';
     final parts = <String>[];
     if (p != 0) parts.add('£${_fmt(p)}');
     if (s != 0) parts.add('${_fmt(s)}s');

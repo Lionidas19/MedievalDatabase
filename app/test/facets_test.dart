@@ -136,6 +136,43 @@ void main() {
     expect(f.counties, isEmpty);
   });
 
+  // The item levels nest, and choosing one clears those beneath it. Found by
+  // typing "wheat" in Advanced Search: every other subcategory then read
+  // "(none)", since no fish is wheat, and the reader could not move off Grain
+  // without first clearing it.
+  test('an item level is judged without the levels beneath it', () {
+    final withFish = [
+      ...records,
+      entry(
+        year: 1280,
+        county: 'Norfolk',
+        locality: 'Banham',
+        category: 'Food',
+        subcategory: 'Fish',
+        specific: 'Eels',
+      ),
+    ];
+    final f = countFacets(
+        withFish,
+        const FacetQuery(
+          startYear: 1270,
+          endYear: 1291,
+          category: 'Food',
+          subcategory: 'Grain',
+          specific: 'Wheat',
+        ));
+
+    expect(f.subcategories.keys, containsAll(['Grain', 'Fish']),
+        reason: 'Fish can be chosen; choosing it clears Wheat');
+    expect(f.categories.keys, containsAll(['Food', 'Labour']),
+        reason: 'and so can another category, which clears both');
+    // The level beneath is still judged by the ones above it.
+    expect(f.specifics.keys, isNot(contains('Eels')));
+    expect(f.specifics.keys, isNot(contains('Day')));
+    // And the answer itself is unchanged: three wheat records.
+    expect(f.matching, 3);
+  });
+
   group('options that cannot answer in the chosen unit', () {
     // Labour is paid by the day, so with kilograms selected it has records
     // but no figures. That is a different state from having no records, and
